@@ -107,8 +107,8 @@ The script will:
 
 - `/start` - Start the bot and show welcome message
 - `/panel` - Access admin panel (admin only)
-- `/whitelist <username>` - Add user to whitelist (admin only)
-- `/unwhitelist <username>` - Remove user from whitelist (admin only)
+- `add <username>` - Add user to whitelist (admin only)
+- `remove <username>` - Remove user from whitelist (admin only)
 
 ## Features
 
