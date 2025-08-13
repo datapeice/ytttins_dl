@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: telegram-downloader-bot
+    restart: unless-stopped
+    volumes:
+      - ./downloads:/app/downloads:rw  # Read-write for downloaded files
+      - ./logs:/app/logs:rw            # Read-write for log files
+      - ./data:/app/data:rw            # Read-write for persistent data
+    environment:
+      - TZ=UTC  # Set your timezone here
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep python | grep main.py || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bot_network
+
+networks:
+  bot_network:
+    driver: bridge
