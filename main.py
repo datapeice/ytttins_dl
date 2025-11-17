@@ -63,10 +63,12 @@ class Stats:
         """Save all data to JSON files"""
         # Save whitelist
         try:
+            logging.info(f"Saving whitelist to {self.users_file}: {list(self.whitelisted_users)}")
             with open(self.users_file, 'w') as f:
                 json.dump({
                     'whitelisted_users': list(self.whitelisted_users)
                 }, f, indent=4)
+            logging.info(f"Whitelist saved successfully")
         except Exception as e:
             logging.error(f"Error saving whitelist: {e}")
             
@@ -107,11 +109,25 @@ class Stats:
         self._save_data()
         return True
         
-    def remove_from_whitelist(self, username: str) -> bool:
+    def remove_from_whitelist(self, username: str, full_removal: bool = True) -> bool:
+        """Remove user from whitelist and optionally from all activity history"""
         if username not in self.whitelisted_users:
+            logging.warning(f"User {username} not found in whitelist")
             return False
+        
+        logging.info(f"Removing user {username} from whitelist")
         self.whitelisted_users.remove(username)
+        
+        # If full_removal is True, also remove from active_users history
+        if full_removal:
+            # Remove user from all active_users dates
+            for date in list(self.active_users.keys()):
+                # This would require storing usernames in active_users instead of IDs
+                # For now, we only remove from whitelist
+                pass
+        
         self._save_data()
+        logging.info(f"User {username} removed successfully. Current whitelist: {self.whitelisted_users}")
         return True
         
     def is_whitelisted(self, username: str) -> bool:
@@ -347,6 +363,12 @@ async def cmd_admin_panel(message: types.Message):
     # Get weekly statistics
     weekly_stats = stats.get_weekly_stats()
     
+    # Get yt-dlp version
+    try:
+        ytdlp_version = yt_dlp.version.__version__
+    except:
+        ytdlp_version = "Unknown"
+    
     # Format the message
     stats_message = (
         "📊 Weekly Statistics:\n\n"
@@ -356,14 +378,17 @@ async def cmd_admin_panel(message: types.Message):
         f"👥 Active Users (last 7 days): {weekly_stats['active_users_count']}\n\n"
         f"📝 Whitelisted Users:\n"
         f"{', '.join(['@' + user for user in stats.whitelisted_users]) if stats.whitelisted_users else 'No whitelisted users'}\n\n"
+        f"🔧 Version: yt-dlp {ytdlp_version}\n\n"
     )
 
     # Create admin control buttons
     builder = InlineKeyboardBuilder()
     builder.add(
         InlineKeyboardButton(text="➕ Add to Whitelist", callback_data="admin:whitelist_add"),
-        InlineKeyboardButton(text="➖ Remove from Whitelist", callback_data="admin:whitelist_remove")
+        InlineKeyboardButton(text="➖ Remove from Whitelist", callback_data="admin:whitelist_remove"),
+        InlineKeyboardButton(text="🔄 Update yt-dlp", callback_data="admin:update_ytdlp")
     )
+    builder.adjust(2, 1)  # 2 buttons in first row, 1 in second
     
     # Add active users list
     if weekly_stats['active_users']:
@@ -390,7 +415,8 @@ async def handle_admin_callback(callback: types.CallbackQuery):
         await callback.answer("You don't have permission to use these controls.", show_alert=True)
         return
 
-    action = callback.data.split(":")[1]
+    # Remove "admin:" prefix
+    action = callback.data.replace("admin:", "", 1)
     
     if action == "whitelist_add":
         await callback.message.answer("Please send the username to add to whitelist in format:\n`add @username`")
@@ -410,13 +436,52 @@ async def handle_admin_callback(callback: types.CallbackQuery):
         builder.adjust(1)  # One button per row
         await callback.message.answer("Select user to remove from whitelist:", reply_markup=builder.as_markup())
     elif action.startswith("remove:"):
-        username = action.split(":")[1]
+        username = action.split(":", 1)[1]
         if stats.remove_from_whitelist(username):
-            await callback.message.answer(f"✅ User @{username} has been removed from the whitelist.")
-            # Update the admin panel message
-            await cmd_admin_panel(callback.message)
+            # Edit the message to show deletion confirmation
+            await callback.message.edit_text(f"✅ User @{username} has been deleted from the whitelist.")
         else:
-            await callback.message.answer(f"⚠️ User @{username} is not in the whitelist.")
+            await callback.answer(f"⚠️ User @{username} is not in the whitelist.", show_alert=True)
+    elif action == "update_ytdlp":
+        # Send initial message
+        status_msg = await callback.message.answer("```\n🔄 Starting yt-dlp update...\n```", parse_mode="Markdown")
+        try:
+            import subprocess
+            
+            # Update status
+            await status_msg.edit_text("```\n🔄 Starting yt-dlp update...\n⏳ Running pip install --upgrade yt-dlp\n```", parse_mode="Markdown")
+            
+            result = subprocess.run(
+                ["pip", "install", "--upgrade", "yt-dlp"],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if result.returncode == 0:
+                # Get new version
+                try:
+                    import importlib
+                    importlib.reload(yt_dlp.version)
+                    new_version = yt_dlp.version.__version__
+                except:
+                    new_version = "Unknown"
+                
+                await status_msg.edit_text(
+                    f"```\n✅ yt-dlp successfully updated!\n📦 Version: {new_version}\n```",
+                    parse_mode="Markdown"
+                )
+            else:
+                error_output = result.stderr[:400] if result.stderr else "Unknown error"
+                await status_msg.edit_text(
+                    f"```\n❌ Update failed!\n\nError:\n{error_output}\n```",
+                    parse_mode="Markdown"
+                )
+        except Exception as e:
+            await status_msg.edit_text(
+                f"```\n❌ Update error!\n\nException:\n{str(e)[:400]}\n```",
+                parse_mode="Markdown"
+            )
 
     await callback.answer()
 
