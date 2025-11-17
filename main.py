@@ -192,6 +192,11 @@ download_logger.addHandler(download_handler)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN not found in environment variables. Check your .env file.")
+
+# Admin user ID from environment variables
+ADMIN_USER_ID = os.getenv("ADMIN_USERNAME")
+if not ADMIN_USER_ID:
+    raise ValueError("ADMIN_USERNAME not found in environment variables. Check your .env file.")
     
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -239,9 +244,6 @@ async def download_media(url: str, is_music: bool = False) -> Path:
     except Exception as e:
         logging.error(f"Error downloading {url}: {str(e)}")
         raise
-
-# Admin user ID
-ADMIN_USER_ID = "datapeice"  # Admin username
 
 # Command handler for /start
 @dp.message(Command("start"))
