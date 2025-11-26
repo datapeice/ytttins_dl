@@ -9,7 +9,8 @@ import json
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Dict, Set
+from typing import Dict, Set, Tuple, Optional
+import uuid
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters.command import Command
@@ -205,6 +206,23 @@ dp = Dispatcher()
 DOWNLOADS_DIR = Path("downloads")
 DOWNLOADS_DIR.mkdir(exist_ok=True)
 
+# Create data directory
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+
+# URL Cache for callback data (to avoid 64 byte limit)
+# {request_id: url}
+url_cache: Dict[str, str] = {}
+
+# Write cookies from env var if present
+
+# Write cookies from env var if present
+if os.getenv("COOKIES_CONTENT"):
+    cookies_path = DATA_DIR / "cookies.txt"
+    with open(cookies_path, "w") as f:
+        f.write(os.getenv("COOKIES_CONTENT"))
+    logging.info("Cookies loaded from environment variable")
+
 def is_youtube_music(url: str) -> bool:
     return "music.youtube.com" in url
 
@@ -218,15 +236,22 @@ def get_platform(url: str) -> str:
     else:
         return "unknown"
 
-async def download_media(url: str, is_music: bool = False) -> Path:
+async def download_media(url: str, is_music: bool = False) -> Tuple[Path, Optional[Path], Dict]:
     output_template = str(DOWNLOADS_DIR / "%(title)s.%(ext)s")
     
+    # Check for cookies file
+    cookie_file = DATA_DIR / "cookies.txt"
+    if not cookie_file.exists():
+        cookie_file = "cookies.txt" if os.path.exists("cookies.txt") else None
+    
     ydl_opts = {
-        'format': 'bestaudio/best' if is_music else 'best',
+        'format': 'bestaudio/best' if is_music else 'bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/best[ext=mp4][vcodec^=avc]/best[ext=mp4]/best',
         'outtmpl': output_template,
         'restrictfilenames': True,
         'noplaylist': True,
         'extract_audio': is_music,
+        'writethumbnail': True,
+        'cookiefile': cookie_file,
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
@@ -238,9 +263,27 @@ async def download_media(url: str, is_music: bool = False) -> Path:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
+            
             if is_music:
                 filename = str(Path(filename).with_suffix('.mp3'))
-            return Path(filename)
+            
+            # Find thumbnail
+            thumbnail_path = None
+            base_path = Path(filename)
+            for ext in ['.jpg', '.jpeg', '.png', '.webp']:
+                thumb_check = base_path.with_suffix(ext)
+                if thumb_check.exists():
+                    thumbnail_path = thumb_check
+                    break
+                    
+            # Get video metadata
+            metadata = {
+                'width': info.get('width'),
+                'height': info.get('height'),
+                'duration': info.get('duration')
+            }
+                    
+            return Path(filename), thumbnail_path, metadata
     except Exception as e:
         logging.error(f"Error downloading {url}: {str(e)}")
         raise
@@ -272,18 +315,22 @@ async def handle_url(message: types.Message):
             return
 
         if platform == "youtube" and not is_youtube_music(message.text):
+            # Generate request ID to avoid callback data limit
+            request_id = str(uuid.uuid4())[:8]
+            url_cache[request_id] = message.text
+            
             # Create inline keyboard for YouTube format selection
             builder = InlineKeyboardBuilder()
             builder.add(
-                InlineKeyboardButton(text="🎵 Audio (MP3)", callback_data=f"format:audio:{message.text}"),
-                InlineKeyboardButton(text="🎥 Video", callback_data=f"format:video:{message.text}")
+                InlineKeyboardButton(text="🎵 Audio (MP3)", callback_data=f"format:audio:{request_id}"),
+                InlineKeyboardButton(text="🎥 Video", callback_data=f"format:video:{request_id}")
             )
             await message.answer("Choose download format:", reply_markup=builder.as_markup())
             return
 
         status_message = await message.answer("Processing your request... ⏳")
         is_music = is_youtube_music(message.text)
-        file_path = await download_media(message.text, is_music)
+        file_path, thumbnail_path, metadata = await download_media(message.text, is_music)
 
         # Track statistics
         stats.add_active_user(message.from_user.id)
@@ -305,12 +352,35 @@ async def handle_url(message: types.Message):
             await status_message.edit_text("Uploading to Telegram... 📤")
             
             if is_music:
-                await message.answer_audio(types.FSInputFile(file_path))
+                if thumbnail_path:
+                    await message.answer_audio(
+                        types.FSInputFile(file_path), 
+                        thumbnail=types.FSInputFile(thumbnail_path),
+                        duration=metadata.get('duration')
+                    )
+                else:
+                    await message.answer_audio(
+                        types.FSInputFile(file_path),
+                        duration=metadata.get('duration')
+                    )
             else:
-                await message.answer_video(types.FSInputFile(file_path))
+                video_kwargs = {
+                    'video': types.FSInputFile(file_path),
+                    'duration': metadata.get('duration'),
+                    'width': metadata.get('width'),
+                    'height': metadata.get('height'),
+                    'supports_streaming': True
+                }
+                
+                if thumbnail_path:
+                    video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
+                    
+                await message.answer_video(**video_kwargs)
             
             # Clean up
             file_path.unlink()
+            if thumbnail_path and thumbnail_path.exists():
+                thumbnail_path.unlink()
             await status_message.delete()
         else:
             await status_message.edit_text("Sorry, something went wrong during download.")
@@ -388,9 +458,10 @@ async def cmd_admin_panel(message: types.Message):
     builder.add(
         InlineKeyboardButton(text="➕ Add to Whitelist", callback_data="admin:whitelist_add"),
         InlineKeyboardButton(text="➖ Remove from Whitelist", callback_data="admin:whitelist_remove"),
-        InlineKeyboardButton(text="🔄 Update yt-dlp", callback_data="admin:update_ytdlp")
+        InlineKeyboardButton(text="🔄 Update yt-dlp", callback_data="admin:update_ytdlp"),
+        InlineKeyboardButton(text="🍪 Update Cookies", callback_data="admin:update_cookies")
     )
-    builder.adjust(2, 1)  # 2 buttons in first row, 1 in second
+    builder.adjust(2, 2)  # 2 buttons per row
     
     # Add active users list
     if weekly_stats['active_users']:
@@ -485,7 +556,33 @@ async def handle_admin_callback(callback: types.CallbackQuery):
                 parse_mode="Markdown"
             )
 
+    elif action == "update_cookies":
+        await callback.message.answer("Please send the `cookies.txt` file now.")
+        
     await callback.answer()
+
+# Handle cookie file upload
+@dp.message(F.document)
+async def handle_document(message: types.Message):
+    if message.from_user.username != ADMIN_USER_ID:
+        return
+
+    if message.document.file_name == "cookies.txt":
+        try:
+            file_id = message.document.file_id
+            file = await bot.get_file(file_id)
+            file_path = file.file_path
+            
+            destination = DATA_DIR / "cookies.txt"
+            await bot.download_file(file_path, destination)
+            
+            await message.answer("✅ `cookies.txt` has been updated successfully!")
+        except Exception as e:
+            logging.error(f"Error updating cookies: {e}")
+            await message.answer(f"❌ Error updating cookies: {str(e)}")
+    else:
+        # Ignore other documents or tell user it's wrong file
+        pass
 
 # Handle whitelist additions via text
 @dp.message(lambda message: message.text and message.text.lower().startswith("add @"))
@@ -509,14 +606,20 @@ async def handle_format_selection(callback: types.CallbackQuery):
         # Answer callback query immediately to prevent timeout
         await callback.answer()
         
-        _, format_type, url = callback.data.split(":", 2)
+        _, format_type, request_id = callback.data.split(":", 2)
         await callback.message.delete()
         
+        # Retrieve URL from cache
+        url = url_cache.get(request_id)
+        if not url:
+            await callback.message.answer("⚠️ Request expired. Please send the link again.")
+            return
+
         status_message = await callback.message.answer("Processing your request... ⏳")
         
         try:
             is_music = format_type == "audio"
-            file_path = await download_media(url, is_music)
+            file_path, thumbnail_path, metadata = await download_media(url, is_music)
 
             # Track statistics
             stats.add_active_user(callback.from_user.id)
@@ -538,12 +641,35 @@ async def handle_format_selection(callback: types.CallbackQuery):
                 await status_message.edit_text("Uploading to Telegram... 📤")
                 
                 if is_music:
-                    await callback.message.answer_audio(types.FSInputFile(file_path))
+                    if thumbnail_path:
+                        await callback.message.answer_audio(
+                            types.FSInputFile(file_path), 
+                            thumbnail=types.FSInputFile(thumbnail_path),
+                            duration=metadata.get('duration')
+                        )
+                    else:
+                        await callback.message.answer_audio(
+                            types.FSInputFile(file_path),
+                            duration=metadata.get('duration')
+                        )
                 else:
-                    await callback.message.answer_video(types.FSInputFile(file_path))
+                    video_kwargs = {
+                        'video': types.FSInputFile(file_path),
+                        'duration': metadata.get('duration'),
+                        'width': metadata.get('width'),
+                        'height': metadata.get('height'),
+                        'supports_streaming': True
+                    }
+                    
+                    if thumbnail_path:
+                        video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
+                        
+                    await callback.message.answer_video(**video_kwargs)
                 
                 # Clean up
                 file_path.unlink()
+                if thumbnail_path and thumbnail_path.exists():
+                    thumbnail_path.unlink()
                 await status_message.delete()
             else:
                 await status_message.edit_text("Sorry, something went wrong during download.")

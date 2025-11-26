@@ -29,6 +29,43 @@ A Telegram bot that downloads media from YouTube, YouTube Music, TikTok, and Ins
 - Docker and Docker Compose (for containerized deployment)
 - FFmpeg (for audio extraction)
 - Telegram Bot Token from [@BotFather](https://t.me/botfather)
+- (Optional) `cookies.txt` for YouTube authentication
+
+## YouTube Authentication (Fix for "Sign in" errors)
+
+If you encounter "Sign in to confirm you’re not a bot" errors:
+
+1. Install a browser extension like "Get cookies.txt LOCALLY" (Chrome/Firefox).
+2. Go to YouTube.com and make sure you are logged in.
+3. Export your cookies to a file named `cookies.txt`.
+
+### How to add cookies to the bot:
+
+**Option 1: Via Telegram (Recommended)**
+1. Open the Admin Panel (`/panel`).
+2. Click "🍪 Update Cookies".
+3. Send the `cookies.txt` file to the bot.
+
+**Option 2: Via Environment Variable (Heroku/Docker)**
+You can paste the content of `cookies.txt` into an environment variable named `COOKIES_CONTENT`. The bot will automatically create the file on startup.
+
+**Option 3: Manual File Placement**
+Place the file in the `data/` directory of the project.
+
+## Heroku Deployment
+
+Since Heroku has an ephemeral filesystem (files are deleted on restart), you have two options for persistence:
+
+1. **Environment Variables (For Cookies)**:
+   - Set `COOKIES_CONTENT` config var with the content of your `cookies.txt`.
+   - This ensures cookies persist across restarts.
+
+2. **Database (For Stats/Whitelist)**:
+   - Currently, this bot uses local JSON files (`users.json`, `stats.json`).
+   - On Heroku, these will be reset when the dyno restarts.
+   - **Note**: If you need persistent stats/whitelist on Heroku, you will need to fork this project and implement a database (e.g., MongoDB/PostgreSQL).
+
+
 
 ## Quick Start
 
