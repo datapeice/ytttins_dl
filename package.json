@@ -1,0 +1,12 @@
+{
+  "name": "ytttins-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for downloading media",
+  "main": "main.py",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
