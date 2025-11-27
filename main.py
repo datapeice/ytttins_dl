@@ -298,6 +298,13 @@ stats = Stats()
 load_dotenv()
 
 # Configure logging
+# Ensure logs directory exists
+log_dir = Path("logs")
+log_dir.mkdir(exist_ok=True)
+
+# Ensure downloads directory exists
+DOWNLOAD_DIR.mkdir(exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
