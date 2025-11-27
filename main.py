@@ -302,8 +302,6 @@ load_dotenv()
 log_dir = Path("logs")
 log_dir.mkdir(exist_ok=True)
 
-# Ensure downloads directory exists
-DOWNLOAD_DIR.mkdir(exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
