@@ -722,8 +722,9 @@ async def send_admin_panel(message: types.Message):
         [InlineKeyboardButton(text="📊 Statistics", callback_data="admin:stats"),
          InlineKeyboardButton(text="📜 History", callback_data="admin:history")],
         [InlineKeyboardButton(text="🍪 Update Cookies", callback_data="admin:update_cookies"),
-         InlineKeyboardButton(text="📂 Get Logs", callback_data="admin:get_logs")],
-        [InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
+         InlineKeyboardButton(text="🔄 Update yt-dlp", callback_data="admin:update_ytdlp")],
+        [InlineKeyboardButton(text="📂 Get Logs", callback_data="admin:get_logs"),
+         InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
     ])
     
     # Add active users list
@@ -990,10 +991,7 @@ async def handle_admin_callback(callback: types.CallbackQuery):
 
     elif action == "close":
         # This action is for the 'Close' button on the admin panel.
-        # If there's a pending cookie upload, clean up the temporary file.
-        if tmp_file.exists():
-            tmp_file.unlink()
-        await callback.message.edit_text("Admin panel closed.") # Or delete the message
+        await callback.message.delete()
         
     await callback.answer()
 
@@ -1089,7 +1087,7 @@ async def handle_whitelist_add(message: types.Message):
     if stats.add_to_whitelist(username):
         await message.answer(f"✅ User @{username} has been added to the whitelist.")
         # Update the admin panel message with updated whitelist
-        await cmd_admin_panel(message)
+        await send_admin_panel(message)
     else:
         await message.answer(f"⚠️ User @{username} is already in the whitelist.")
 
