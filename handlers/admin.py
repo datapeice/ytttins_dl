@@ -117,7 +117,7 @@ async def handle_admin_callback(callback: types.CallbackQuery):
 
     action = callback.data.replace("admin:", "", 1)
     
-    elif action == "add_user":
+    if action == "add_user":
         await callback.message.answer("Please send the username to add to whitelist in format:\n`/whitelist username`", parse_mode="Markdown")
         await callback.answer()
         
@@ -197,7 +197,7 @@ async def handle_admin_callback(callback: types.CallbackQuery):
             except:
                 pass
         
-        ITEMS_PER_PAGE = 10
+        ITEMS_PER_PAGE = 20
         
         if stats.Session:
             try:
@@ -211,9 +211,20 @@ async def handle_admin_callback(callback: types.CallbackQuery):
                     else:
                         text = f"📜 *Download History (Page {page + 1})*\n\n"
                         for h in history:
-                            date_str = h.timestamp.strftime('%d.%m %H:%M')
-                            # Escape markdown special chars in username if needed, but simple @username is usually fine
-                            text += f"`{date_str}` @{h.username} - [Link]({h.url})\n"
+                            date_str = h.timestamp.strftime('%d-%m %H:%M')
+                            
+                            platform = "Link"
+                            url = h.url if h.url else ""
+                            if "youtube.com" in url or "youtu.be" in url: platform = "YouTube"
+                            elif "tiktok.com" in url: platform = "TikTok"
+                            elif "instagram.com" in url: platform = "Instagram"
+                            elif "twitter.com" in url or "x.com" in url: platform = "X"
+                            elif "facebook.com" in url or "fb.watch" in url: platform = "Facebook"
+                            elif "twitch.tv" in url: platform = "Twitch"
+                            elif "soundcloud.com" in url: platform = "SoundCloud"
+
+                            username = h.username if h.username else "Unknown"
+                            text += f"`{date_str}` | @{username} | [{platform}]({url})\n"
                         
                         # Pagination buttons
                         buttons = []
@@ -252,17 +263,39 @@ async def handle_admin_callback(callback: types.CallbackQuery):
                     else:
                         text = f"📜 *Download History (Page {page + 1})*\n\n"
                         for line in page_lines:
-                            # Parse log line format: [YYYY-MM-DD HH:MM:SS] User: username (id) | URL: url | Title: title
+                            # Parse log line format: 2025-12-20 23:43:56,519 - User: Ilya Datsiuk (@datapeice, ID: 6299330933) | Platform: youtube | Type: Video (360p) | URL: https://youtu.be/dO-mJjZfwxE
                             try:
-                                parts = line.split('|')
-                                timestamp_part = parts[0].split(']')[0].strip('[')
-                                dt = datetime.strptime(timestamp_part, "%Y-%m-%d %H:%M:%S")
-                                date_str = dt.strftime('%d.%m %H:%M')
+                                # Split by " - User: " to separate timestamp
+                                parts = line.split(" - User: ", 1)
+                                if len(parts) < 2:
+                                    raise ValueError("Invalid format")
+                                    
+                                timestamp_str = parts[0].split(',')[0] # 2025-12-20 23:43:56
+                                dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                                date_str = dt.strftime('%d-%m %H:%M')
                                 
-                                user_part = parts[0].split('User:')[1].split('(')[0].strip()
-                                url_part = parts[1].replace('URL:', '').strip()
+                                rest = parts[1] 
+                                # Ilya Datsiuk (@datapeice, ID: 6299330933) | Platform: youtube | Type: Video (360p) | URL: https://youtu.be/dO-mJjZfwxE
                                 
-                                text += f"`{date_str}` @{user_part} - [Link]({url_part})\n"
+                                # Extract username
+                                import re
+                                username_match = re.search(r'\(@([^,]+),', rest)
+                                username = username_match.group(1) if username_match else "Unknown"
+                                
+                                # Extract URL
+                                url_match = re.search(r'URL: (https?://\S+)', rest)
+                                url = url_match.group(1) if url_match else ""
+                                
+                                platform = "Link"
+                                if "youtube.com" in url or "youtu.be" in url: platform = "YouTube"
+                                elif "tiktok.com" in url: platform = "TikTok"
+                                elif "instagram.com" in url: platform = "Instagram"
+                                elif "twitter.com" in url or "x.com" in url: platform = "X"
+                                elif "facebook.com" in url or "fb.watch" in url: platform = "Facebook"
+                                elif "twitch.tv" in url: platform = "Twitch"
+                                elif "soundcloud.com" in url: platform = "SoundCloud"
+
+                                text += f"`{date_str}` | @{username} | [{platform}]({url})\n"
                             except:
                                 text += f"{line.strip()}\n"
 
@@ -342,22 +375,73 @@ async def handle_admin_callback(callback: types.CallbackQuery):
     elif action == "stats":
         # Refresh stats by calling back handler logic
         # We need to manually trigger the 'back' logic which refreshes the main panel
-        callback.data = "admin:back"
-        await handle_admin_callback(callback)
-        return
+        # Instead of modifying callback.data (which is frozen), we just call the logic for 'back'
+        # But since 'back' logic is inside this function, we can just recursively call with modified data?
+        # No, we can't modify data. We should extract the panel logic.
+        # For now, let's just copy the 'back' logic here or use a hack.
+        # Actually, the cleanest way without refactoring everything is to just copy the logic or use a helper.
+        # Let's just copy the logic from 'back' block for now to be safe and quick.
+        
+        weekly_stats = stats.get_weekly_stats()
+        try:
+            ytdlp_version = yt_dlp.version.__version__
+        except:
+            ytdlp_version = "Unknown"
+        
+        whitelisted_list = "\n".join([f"  @{user}" for user in stats.whitelisted_users]) if stats.whitelisted_users else "  No whitelisted users"
+
+        stats_message = (
+            "📊 Weekly Statistics:\n\n"
+            f"📥 Downloads:\n"
+            f"   📹 Videos: {weekly_stats['video_count']}\n"
+            f"   🎵 Music: {weekly_stats['audio_count']}\n\n"
+            f"👥 Active Users (last 7 days): {weekly_stats['active_users_count']}\n\n"
+            f"📝 Whitelisted Users:\n"
+            f"{whitelisted_list}\n\n"
+            f"🔧 Version: yt-dlp {ytdlp_version}\n\n"
+        )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👥 Users List", callback_data="admin:users")],
+            [InlineKeyboardButton(text="➕ Add User", callback_data="admin:add_user"),
+             InlineKeyboardButton(text="➖ Remove User", callback_data="admin:remove_user")],
+            [InlineKeyboardButton(text="📊 Statistics", callback_data="admin:stats"),
+             InlineKeyboardButton(text="📜 History", callback_data="admin:history")],
+            [InlineKeyboardButton(text="🍪 Update Cookies", callback_data="admin:update_cookies"),
+             InlineKeyboardButton(text="📂 Get Logs", callback_data="admin:get_logs")],
+            [InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
+        ])
+        
+        if weekly_stats['active_users']:
+            user_list = []
+            bot = callback.bot
+            for user_id in weekly_stats['active_users']:
+                try:
+                    user = await bot.get_chat(user_id)
+                    username = user.username or "No username"
+                    user_list.append(f"@{username}")
+                except Exception:
+                    user_list.append(f"User {user_id}")
+            
+            stats_message += "Active Users List:\n"
+            stats_message += "\n".join(user_list)
+        else:
+            stats_message += "No active users in the last 7 days."
+
+        await callback.message.edit_text(stats_message, reply_markup=keyboard)
 
     elif action == "get_logs":
         # Try multiple log locations
         log_files = [
             Path("logs/bot.log"),
-            Path("bot.log"),
-            Path("logs/downloads.log")
+            Path("bot.log")
         ]
         
         found = False
         for log_file in log_files:
             if log_file.exists() and log_file.stat().st_size > 0:
-                await callback.message.answer_document(types.FSInputFile(log_file), caption=f"📂 {log_file.name}")
+                filename = log_file.stem + ".txt"
+                await callback.message.answer_document(types.FSInputFile(log_file, filename=filename), caption=f"📂 {filename}")
                 found = True
         
         if not found:
