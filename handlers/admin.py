@@ -239,7 +239,7 @@ async def handle_admin_callback(callback: types.CallbackQuery):
                         ])
             except Exception as e:
                 logging.error(f"Error fetching history: {e}")
-                text = "❌ Error fetching history."
+                text = f"❌ Error fetching history: {str(e)}"
                 keyboard = get_back_keyboard()
         else:
             # File fallback (simple implementation without pagination for now, or basic slicing)
@@ -432,7 +432,11 @@ async def handle_admin_callback(callback: types.CallbackQuery):
         else:
             stats_message += "No active users in the last 7 days."
 
-        await callback.message.edit_text(stats_message, reply_markup=keyboard)
+        try:
+            await callback.message.edit_text(stats_message, reply_markup=keyboard)
+        except Exception:
+            # Ignore if message is not modified
+            pass
 
     elif action == "get_logs":
         # Try multiple log locations
