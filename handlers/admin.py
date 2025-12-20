@@ -1,5 +1,7 @@
 import logging
 import yt_dlp
+from datetime import datetime
+from pathlib import Path
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -115,9 +117,11 @@ async def handle_admin_callback(callback: types.CallbackQuery):
 
     action = callback.data.replace("admin:", "", 1)
     
-    if action == "whitelist_add":
-        await callback.message.answer("Please send the username to add to whitelist in format:\n`add @username`")
-    elif action == "whitelist_remove":
+    elif action == "add_user":
+        await callback.message.answer("Please send the username to add to whitelist in format:\n`/whitelist username`", parse_mode="Markdown")
+        await callback.answer()
+        
+    elif action == "remove_user":
         if not stats.whitelisted_users:
             await callback.message.answer("The whitelist is empty.")
             await callback.answer()
@@ -129,8 +133,15 @@ async def handle_admin_callback(callback: types.CallbackQuery):
                 text=f"❌ @{username}",
                 callback_data=f"admin:remove:{username}"
             ))
+        builder.add(InlineKeyboardButton(text="🔙 Back", callback_data="admin:back"))
         builder.adjust(1)
-        await callback.message.answer("Select user to remove from whitelist:", reply_markup=builder.as_markup())
+        await callback.message.edit_text("Select user to remove from whitelist:", reply_markup=builder.as_markup())
+        
+    elif action == "users":
+        whitelisted_list = "\n".join([f"• @{user}" for user in stats.whitelisted_users]) if stats.whitelisted_users else "No whitelisted users"
+        text = f"📝 *Whitelisted Users:*\n\n{whitelisted_list}"
+        await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_back_keyboard())
+
     elif action.startswith("remove:"):
         username = action.split(":", 1)[1]
         if stats.remove_from_whitelist(username):
@@ -178,45 +189,104 @@ async def handle_admin_callback(callback: types.CallbackQuery):
     elif action == "update_cookies":
         await callback.message.answer("Please send the `cookies.txt` file now.")
         
-    elif action == "history":
+    elif action.startswith("history"):
+        page = 0
+        if ":" in action:
+            try:
+                page = int(action.split(":")[1])
+            except:
+                pass
+        
+        ITEMS_PER_PAGE = 10
+        
         if stats.Session:
             try:
                 with stats.Session() as session:
-                    history = session.query(DownloadHistory).order_by(DownloadHistory.timestamp.desc()).limit(10).all()
+                    total_count = session.query(DownloadHistory).count()
+                    history = session.query(DownloadHistory).order_by(DownloadHistory.timestamp.desc()).offset(page * ITEMS_PER_PAGE).limit(ITEMS_PER_PAGE).all()
+                    
                     if not history:
-                        text = "📜 *Download History (Last 10)*\n\nNo downloads recorded yet."
+                        text = "📜 *Download History*\n\nNo downloads recorded yet."
+                        keyboard = get_back_keyboard()
                     else:
-                        text = "📜 *Download History (Last 10)*\n\n"
+                        text = f"📜 *Download History (Page {page + 1})*\n\n"
                         for h in history:
-                            text += f"👤 {h.username} (ID: {h.user_id})\n"
-                            text += f"📹 {h.title}\n"
-                            text += f"🔗 {h.url}\n"
-                            text += f"📅 {h.timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                            text += "-------------------\n"
+                            date_str = h.timestamp.strftime('%d.%m %H:%M')
+                            # Escape markdown special chars in username if needed, but simple @username is usually fine
+                            text += f"`{date_str}` @{h.username} - [Link]({h.url})\n"
+                        
+                        # Pagination buttons
+                        buttons = []
+                        if page > 0:
+                            buttons.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"admin:history:{page-1}"))
+                        if (page + 1) * ITEMS_PER_PAGE < total_count:
+                            buttons.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"admin:history:{page+1}"))
+                        
+                        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                            buttons,
+                            [InlineKeyboardButton(text="🔙 Back", callback_data="admin:back")]
+                        ])
             except Exception as e:
                 logging.error(f"Error fetching history: {e}")
                 text = "❌ Error fetching history."
+                keyboard = get_back_keyboard()
         else:
+            # File fallback (simple implementation without pagination for now, or basic slicing)
             log_file = Path("logs/downloads.log")
             if log_file.exists():
                 try:
                     with open(log_file, 'r') as f:
                         lines = f.readlines()
-                    last_lines = lines[-10:]
-                    if not last_lines:
-                        text = "📜 *Download History (Last 10)*\n\nNo downloads recorded yet."
+                    
+                    total_count = len(lines)
+                    # Reverse lines to show newest first
+                    lines = list(reversed(lines))
+                    
+                    start_idx = page * ITEMS_PER_PAGE
+                    end_idx = start_idx + ITEMS_PER_PAGE
+                    page_lines = lines[start_idx:end_idx]
+                    
+                    if not page_lines:
+                        text = "📜 *Download History*\n\nNo downloads recorded yet."
+                        keyboard = get_back_keyboard()
                     else:
-                        text = "📜 *Download History (Last 10)*\n\n"
-                        for line in reversed(last_lines):
-                            text += f"{line.strip()}\n"
-                            text += "-------------------\n"
+                        text = f"📜 *Download History (Page {page + 1})*\n\n"
+                        for line in page_lines:
+                            # Parse log line format: [YYYY-MM-DD HH:MM:SS] User: username (id) | URL: url | Title: title
+                            try:
+                                parts = line.split('|')
+                                timestamp_part = parts[0].split(']')[0].strip('[')
+                                dt = datetime.strptime(timestamp_part, "%Y-%m-%d %H:%M:%S")
+                                date_str = dt.strftime('%d.%m %H:%M')
+                                
+                                user_part = parts[0].split('User:')[1].split('(')[0].strip()
+                                url_part = parts[1].replace('URL:', '').strip()
+                                
+                                text += f"`{date_str}` @{user_part} - [Link]({url_part})\n"
+                            except:
+                                text += f"{line.strip()}\n"
+
+                        # Pagination buttons
+                        buttons = []
+                        if page > 0:
+                            buttons.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"admin:history:{page-1}"))
+                        if end_idx < total_count:
+                            buttons.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"admin:history:{page+1}"))
+                        
+                        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                            buttons,
+                            [InlineKeyboardButton(text="🔙 Back", callback_data="admin:back")]
+                        ])
+
                 except Exception as e:
                     logging.error(f"Error reading history log: {e}")
                     text = "❌ Error reading history log."
+                    keyboard = get_back_keyboard()
             else:
                 text = "❌ History log not found."
+                keyboard = get_back_keyboard()
             
-        await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_back_keyboard())
+        await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=keyboard, disable_web_page_preview=True)
 
     elif action == "back":
         # Re-render panel
@@ -270,15 +340,28 @@ async def handle_admin_callback(callback: types.CallbackQuery):
         await callback.message.edit_text(stats_message, reply_markup=keyboard)
 
     elif action == "stats":
-        # Just refresh
-        await handle_admin_callback(callback) # Recursive call with 'back' logic essentially
+        # Refresh stats by calling back handler logic
+        # We need to manually trigger the 'back' logic which refreshes the main panel
+        callback.data = "admin:back"
+        await handle_admin_callback(callback)
+        return
 
     elif action == "get_logs":
-        log_file = Path("logs/bot.log")
-        if log_file.exists() and log_file.stat().st_size > 0:
-            await callback.message.answer_document(types.FSInputFile(log_file), caption="📂 Bot Logs")
-        else:
-            await callback.message.answer("❌ Log file is empty or not found.")
+        # Try multiple log locations
+        log_files = [
+            Path("logs/bot.log"),
+            Path("bot.log"),
+            Path("logs/downloads.log")
+        ]
+        
+        found = False
+        for log_file in log_files:
+            if log_file.exists() and log_file.stat().st_size > 0:
+                await callback.message.answer_document(types.FSInputFile(log_file), caption=f"📂 {log_file.name}")
+                found = True
+        
+        if not found:
+            await callback.message.answer("❌ No log files found.")
         await callback.answer()
 
     elif action == "close":
