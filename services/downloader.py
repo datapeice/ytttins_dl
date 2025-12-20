@@ -178,13 +178,17 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             'preferredquality': '320',
         })
     else:
-        ydl_opts['postprocessors'].append({
-            'key': 'FFmpegThumbnailsConvertor',
-            'format': 'jpg',
-        })
-        ydl_opts['postprocessors'].append({
-            'key': 'EmbedThumbnail',
-        })
+        # Only add thumbnail embedding if it's safe or we are sure about the container
+        # For TikTok/Shorts, embedding often fails or causes issues with ffmpeg
+        # We will skip embedding for now to ensure stability
+        pass
+        # ydl_opts['postprocessors'].append({
+        #     'key': 'FFmpegThumbnailsConvertor',
+        #     'format': 'jpg',
+        # })
+        # ydl_opts['postprocessors'].append({
+        #     'key': 'EmbedThumbnail',
+        # })
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

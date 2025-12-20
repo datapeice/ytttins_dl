@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String, DateTime, BigInteger
 from sqlalchemy.orm import declarative_base
 from datetime import datetime
 
@@ -17,7 +17,7 @@ class DownloadStat(Base):
 class ActiveUser(Base):
     __tablename__ = 'active_users'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer)
+    user_id = Column(BigInteger)
     date = Column(String) # YYYY-MM-DD
 
 class Cookie(Base):
@@ -29,7 +29,7 @@ class Cookie(Base):
 class DownloadHistory(Base):
     __tablename__ = 'download_history'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer)
+    user_id = Column(BigInteger)
     username = Column(String)
     platform = Column(String)
     content_type = Column(String)
