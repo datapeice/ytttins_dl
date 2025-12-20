@@ -54,9 +54,16 @@ async def handle_url(message: types.Message):
             await message.answer("Choose download format:", reply_markup=builder.as_markup())
             return
 
-        status_message = await message.answer("Processing your request... ⏳")
+        status_message = await message.answer("⏳ Starting...")
+        
+        async def update_status(text: str):
+            try:
+                await status_message.edit_text(text)
+            except Exception:
+                pass
+        
         is_music = is_youtube_music(message.text)
-        file_path, thumbnail_path, metadata = await download_media(message.text, is_music)
+        file_path, thumbnail_path, metadata = await download_media(message.text, is_music, progress_callback=update_status)
 
         stats.add_active_user(message.from_user.id)
         stats.add_download(
@@ -79,13 +86,20 @@ async def handle_url(message: types.Message):
         )
 
         if file_path.exists():
-            await status_message.edit_text("Uploading to Telegram... 📤")
+            await update_status("📤 Uploading to Telegram...")
             
-            caption = (
-                f"🎬 {metadata.get('title')}\n"
-                f"👤 {metadata.get('uploader')}\n"
-                f"🔗 {metadata.get('webpage_url')}"
-            )
+            if platform == "tiktok":
+                caption = (
+                    f"@{metadata.get('uploader')} | <a href=\"{metadata.get('webpage_url')}\">Video link</a>\n"
+                    f"Developed by @datapeice"
+                )
+            else:
+                caption = (
+                    f"🎬 {metadata.get('title')}\n"
+                    f"👤 {metadata.get('uploader')}\n"
+                    f"🔗 {metadata.get('webpage_url')}\n\n"
+                    f"Developed by @datapeice"
+                )
 
             if is_music:
                 if thumbnail_path:
@@ -106,7 +120,8 @@ async def handle_url(message: types.Message):
                     'video': types.FSInputFile(file_path),
                     'duration': metadata.get('duration'),
                     'supports_streaming': True,
-                    'caption': caption
+                    'caption': caption,
+                    'parse_mode': 'HTML' if platform == "tiktok" else None
                 }
                 
                 # if metadata.get('width') and metadata.get('height'):
@@ -127,11 +142,23 @@ async def handle_url(message: types.Message):
             await status_message.edit_text("Sorry, something went wrong during download.")
     
     except Exception as e:
-        logging.error(f"Error: {str(e)}")
-        if 'status_message' in locals():
-            await status_message.edit_text(f"Sorry, an error occurred: {str(e)}")
+        error_msg = str(e)
+        logging.error(f"Error: {error_msg}")
+        
+        # User-friendly error messages
+        if "No working app info" in error_msg or "tiktok:sound" in error_msg or "music" in error_msg.lower():
+            user_error = "❌ TikTok sound/music links are not supported. Please send a video link instead."
+        elif "Unsupported URL" in error_msg:
+            user_error = "❌ This URL is not supported. Please try a different link."
+        elif "Private video" in error_msg or "Login required" in error_msg:
+            user_error = "❌ This video is private or requires login."
         else:
-            await message.answer(f"Sorry, an error occurred: {str(e)}")
+            user_error = f"❌ An error occurred: {error_msg}"
+        
+        if 'status_message' in locals():
+            await status_message.edit_text(user_error)
+        else:
+            await message.answer(user_error)
 
 @router.callback_query(F.data.startswith("format:"))
 async def handle_format_selection(callback: types.CallbackQuery):
@@ -158,11 +185,17 @@ async def handle_format_selection(callback: types.CallbackQuery):
             await callback.message.edit_text("Select video quality:", reply_markup=builder.as_markup())
             return
 
-        status_message = await callback.message.edit_text("Processing your request... ⏳")
+        status_message = await callback.message.edit_text("⏳ Starting...")
+        
+        async def update_status(text: str):
+            try:
+                await status_message.edit_text(text)
+            except Exception:
+                pass
         
         try:
             is_music = True
-            file_path, thumbnail_path, metadata = await download_media(url, is_music)
+            file_path, thumbnail_path, metadata = await download_media(url, is_music, progress_callback=update_status)
 
             stats.add_active_user(callback.from_user.id)
             stats.add_download(
@@ -185,12 +218,13 @@ async def handle_format_selection(callback: types.CallbackQuery):
             )
 
             if file_path.exists():
-                await status_message.edit_text("Uploading to Telegram... 📤")
+                await update_status("📤 Uploading to Telegram...")
                 
                 caption = (
                     f"🎬 {metadata.get('title')}\n"
                     f"👤 {metadata.get('uploader')}\n"
-                    f"🔗 {metadata.get('webpage_url')}"
+                    f"🔗 {metadata.get('webpage_url')}\n\n"
+                    f"Developed by @datapeice"
                 )
 
                 if thumbnail_path:
@@ -215,13 +249,22 @@ async def handle_format_selection(callback: types.CallbackQuery):
                 await status_message.edit_text("Sorry, something went wrong during download.")
 
         except Exception as e:
-            logging.error(f"Error: {str(e)}")
-            await status_message.edit_text(f"Sorry, an error occurred: {str(e)}")
+            error_msg = str(e)
+            logging.error(f"Error: {error_msg}")
+            
+            if "No working app info" in error_msg or "tiktok:sound" in error_msg:
+                user_error = "❌ TikTok sound/music links are not supported. Please send a video link."
+            elif "Unsupported URL" in error_msg:
+                user_error = "❌ This URL is not supported."
+            else:
+                user_error = f"❌ An error occurred: {error_msg}"
+            
+            await status_message.edit_text(user_error)
 
     except Exception as e:
         logging.error(f"Error in callback handling: {str(e)}")
         try:
-            await callback.message.answer("Sorry, this request has expired. Please try again.")
+            await callback.message.answer("❌ Sorry, this request has expired. Please try again.")
         except Exception:
             pass
 
@@ -236,10 +279,16 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
             await callback.message.edit_text("⚠️ Request expired. Please send the link again.")
             return
 
-        status_message = await callback.message.edit_text(f"Downloading video ({height}p)... ⏳")
+        status_message = await callback.message.edit_text(f"⏳ Downloading video ({height}p)...")
+        
+        async def update_status(text: str):
+            try:
+                await status_message.edit_text(text)
+            except Exception:
+                pass
         
         try:
-            file_path, thumbnail_path, metadata = await download_media(url, is_music=False, video_height=int(height))
+            file_path, thumbnail_path, metadata = await download_media(url, is_music=False, video_height=int(height), progress_callback=update_status)
 
             stats.add_active_user(callback.from_user.id)
             stats.add_download(
@@ -262,12 +311,13 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
             )
 
             if file_path.exists():
-                await status_message.edit_text("Uploading to Telegram... 📤")
+                await update_status("📤 Uploading to Telegram...")
                 
                 caption = (
                     f"🎬 {metadata.get('title')}\n"
                     f"👤 {metadata.get('uploader')}\n"
-                    f"🔗 {metadata.get('webpage_url')}"
+                    f"🔗 {metadata.get('webpage_url')}\n\n"
+                    f"Developed by @datapeice"
                 )
 
                 video_kwargs = {
@@ -295,8 +345,17 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
                 await status_message.edit_text("Sorry, something went wrong during download.")
 
         except Exception as e:
-            logging.error(f"Error: {str(e)}")
-            await status_message.edit_text(f"Sorry, an error occurred: {str(e)}")
+            error_msg = str(e)
+            logging.error(f"Error in video download: {error_msg}")
+            
+            if "No working app info" in error_msg or "tiktok:sound" in error_msg:
+                user_error = "❌ TikTok sound/music links are not supported. Please send a video link."
+            elif "Unsupported URL" in error_msg:
+                user_error = "❌ This URL is not supported."
+            else:
+                user_error = f"❌ An error occurred: {error_msg}"
+            
+            await status_message.edit_text(user_error)
 
     except Exception as e:
         logging.error(f"Error in resolution callback: {str(e)}")
