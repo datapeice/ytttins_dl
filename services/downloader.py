@@ -146,7 +146,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         format_str = 'bestvideo[vcodec^=h264]+bestaudio[ext=m4a]/bestvideo[vcodec^=avc]+bestaudio[ext=m4a]/best[vcodec^=h264]/best[vcodec^=avc]/best'
 
     # Fallback for YouTube Shorts or when specific formats are missing
-    if "youtube.com/shorts" in url or "youtu.be" in url:
+    if "youtube.com" in url or "youtu.be" in url:
          # Shorts often have limited formats, so we relax the constraints if the strict ones fail
          # But we can't easily retry inside yt-dlp options.
          # Instead, we can make the format string more permissive at the end.
