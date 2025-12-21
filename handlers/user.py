@@ -153,6 +153,8 @@ async def handle_url(message: types.Message):
             user_error = "❌ This URL is not supported. Please try a different link."
         elif "Private video" in error_msg or "Login required" in error_msg:
             user_error = "❌ This video is private or requires login."
+        elif "Sign in to confirm" in error_msg:
+            user_error = "⚠️ YouTube requires authentication (cookies). Please contact the bot admin."
         else:
             user_error = f"❌ An error occurred: {error_msg}"
         

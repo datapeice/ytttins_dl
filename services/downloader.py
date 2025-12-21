@@ -139,10 +139,18 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         format_str = 'bestaudio/best'
     elif video_height:
         # Try to find H.264 video at specific height, fallback to any codec at that height
+        # If specific height is not available, fallback to best available
         format_str = f'bestvideo[height<={video_height}][vcodec^=h264]+bestaudio[ext=m4a]/bestvideo[height<={video_height}][vcodec^=avc]+bestaudio[ext=m4a]/best[height<={video_height}][vcodec^=h264]/best[height<={video_height}][vcodec^=avc]/best[height<={video_height}]/best'
     else:
         # Prioritize H.264/AVC for Telegram compatibility
         format_str = 'bestvideo[vcodec^=h264]+bestaudio[ext=m4a]/bestvideo[vcodec^=avc]+bestaudio[ext=m4a]/best[vcodec^=h264]/best[vcodec^=avc]/best'
+
+    # Fallback for YouTube Shorts or when specific formats are missing
+    if "youtube.com/shorts" in url or "youtu.be" in url:
+         # Shorts often have limited formats, so we relax the constraints if the strict ones fail
+         # But we can't easily retry inside yt-dlp options.
+         # Instead, we can make the format string more permissive at the end.
+         format_str += '/bestvideo+bestaudio/best'
 
     ydl_opts = {
         'format': format_str,
@@ -249,12 +257,18 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 
                 # Convert to H.264 if needed
                 codec = metadata.get('codec', '').lower()
-                if codec not in ['h264', 'avc']:
+                is_mp4 = str(filename).lower().endswith('.mp4')
+                
+                if codec not in ['h264', 'avc'] or not is_mp4:
                     if progress_callback:
                         await progress_callback(f"🔄 Converting from {codec} to H.264...")
+                    
+                    logging.info(f"Video needs conversion: codec={codec}, is_mp4={is_mp4}")
                     filename_path = Path(filename)
                     filename_path = convert_to_h264(filename_path)
                     filename = str(filename_path)
+                    
+                    # Update metadata after conversion
                     metadata = get_video_metadata(filename_path)
                     metadata['title'] = info.get('title', 'Unknown')
                     metadata['uploader'] = info.get('uploader', 'Unknown')
