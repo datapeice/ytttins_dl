@@ -9,6 +9,7 @@ ADMIN_USER_ID = os.getenv("ADMIN_USERNAME")
 DATABASE_URL = os.getenv("DATABASE_URL")
 COOKIES_CONTENT = os.getenv("COOKIES_CONTENT")
 WHITELISTED_ENV = os.getenv("WHITELISTED", "")
+HOME_SERVER_ADDRESS = os.getenv("HOME_SERVER_ADDRESS", "localhost:50057") 
 
 BASE_DIR = Path(__file__).parent
 DOWNLOADS_DIR = BASE_DIR / "downloads"

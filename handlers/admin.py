@@ -80,13 +80,12 @@ async def send_admin_panel(message: types.Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👥 Users List", callback_data="admin:users")],
         [InlineKeyboardButton(text="➕ Add User", callback_data="admin:add_user"),
-         InlineKeyboardButton(text="➖ Remove User", callback_data="admin:remove_user")],
+        InlineKeyboardButton(text="➖ Remove User", callback_data="admin:remove_user")],
         [InlineKeyboardButton(text="📊 Statistics", callback_data="admin:stats"),
-         InlineKeyboardButton(text="📜 History", callback_data="admin:history")],
+        InlineKeyboardButton(text="📜 History", callback_data="admin:history")],
         [InlineKeyboardButton(text="🍪 Update Cookies", callback_data="admin:update_cookies"),
-         InlineKeyboardButton(text="🔄 Update yt-dlp", callback_data="admin:update_ytdlp")],
-        [InlineKeyboardButton(text="📂 Get Logs", callback_data="admin:get_logs"),
-         InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
+        InlineKeyboardButton(text="📂 Get Logs", callback_data="admin:get_logs")],
+        [InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
     ])
     
     if weekly_stats['active_users']:

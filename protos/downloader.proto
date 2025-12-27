@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package downloader;
+
+service DownloaderService {
+  // Запрос на скачивание. Возвращает поток данных (метаданные -> обложка -> файл)
+  rpc DownloadMedia (DownloadRequest) returns (stream DownloadResponse) {}
+}
+
+message DownloadRequest {
+  string url = 1;
+  bool is_music = 2;
+  int32 video_height = 3;
+  string cookies_content = 4; // Содержимое cookies.txt для передачи авторизации
+}
+
+message Metadata {
+  string title = 1;
+  string uploader = 2;
+  string webpage_url = 3;
+  int32 duration = 4;
+  int32 width = 5;
+  int32 height = 6;
+  string filename = 7;
+}
+
+message DownloadResponse {
+  oneof payload {
+    Metadata metadata = 1;      // Первым сообщением придут метаданные
+    bytes file_chunk = 2;       // Куски основного файла (видео или аудио)
+    bytes thumbnail_chunk = 3;  // Куски файла обложки (thumbnail)
+  }
+}
