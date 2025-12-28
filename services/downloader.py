@@ -3,6 +3,8 @@ import logging
 import os
 import uuid
 import yt_dlp
+import asyncio
+import random
 from pathlib import Path
 from typing import Tuple, Dict, Optional, Callable
 
@@ -13,6 +15,31 @@ import protos.downloader_pb2_grpc as pb2_grpc
 from config import DOWNLOADS_DIR, DATA_DIR, COOKIES_CONTENT, HOME_SERVER_ADDRESS
 from database.storage import stats
 from database.models import Cookie
+
+# === Funny statuses (English) ===
+FUNNY_STATUSES = [
+    "💻 Hacking the Pentagon...",
+    "🛡️ Fending off the FBI...",
+    "🍕 Ordering pizza for the server's rats...",
+    "🐈 Petting the server cat...",
+    "🔥 Warming up the GPU...",
+    "👀 Watching the video with the whole server...",
+    "🚀 Preparing for takeoff...",
+    "🧹 Sweeping up bits...",
+    "🤔 Thinking about the meaning of life...",
+    "📦 Packing pixels...",
+    "📡 Searching for Elon Musk's satellites...",
+    "🔌 Plugging the cable in deeper...",
+    "☕ Drinking coffee, waiting for download...",
+    "🔨 Fixing what isn't broken...",
+    "🦖 Running away from dinosaurs...",
+    "💿 Wiping the disk with alcohol...",
+    "👾 Negotiating with reptilians...",
+    "🇵🇱 Searching for Polish alt girls...",
+    "🛃 Deporting migrants...",
+    "🙏 Praying the server survives...",
+    "📜 Signing a contract with Crowley...",
+]
 
 # === Работа с Cookies ===
 def get_cookies_content() -> str:
@@ -62,34 +89,30 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     
     # 1. Музыка -> Домашний сервер
     if is_music:
-        if progress_callback: await progress_callback("Downloading... it can take more time...")
-        return await _download_remote_grpc(url, is_music, video_height)
+        return await _download_remote_grpc(url, is_music, video_height, progress_callback)
 
     # 2. TikTok -> Локально на VPS
     if platform == "tiktok":
         try:
-            # Используем стандартное сообщение, как было раньше
             if progress_callback: await progress_callback("⏳ Starting...") 
             return await _download_local_tiktok(url)
         except Exception as e:
-            logging.warning(f"Local TikTok failed ({e}), switching to Home Server...")
-            # Если не вышло, пробуем через дом
-            if progress_callback: await progress_callback("Downloading... it can take more time...")
+            # Сюда мы попадем, если видео HEVC (yt-dlp выдаст ошибку или мы сами кинем исключение)
+            logging.warning(f"Local TikTok failed or HEVC detected ({e}), switching to Home Server...")
             # Fallback к remote download
 
     # 3. YouTube/Instagram/Fallback -> Домашний сервер
-    if progress_callback: await progress_callback("Downloading... it can take more time...")
-    return await _download_remote_grpc(url, is_music, video_height)
+    return await _download_remote_grpc(url, is_music, video_height, progress_callback)
 
 
 async def _download_local_tiktok(url: str) -> Tuple[Path, Optional[Path], Dict]:
-    """Скачивает TikTok локально. Если кодек не h264, выбрасывает исключение."""
+    """Скачивание TikTok на VPS. Строго требует h264."""
     
     output_template = str(DOWNLOADS_DIR / f"%(title)s_%(id)s_{uuid.uuid4().hex[:4]}.%(ext)s")
     cookie_file = DATA_DIR / "cookies.txt"
     
     ydl_opts = {
-        'format': 'best[vcodec^=h264]/best[vcodec^=avc]/best', 
+        'format': 'best[vcodec^=h264]/best[vcodec^=avc]', 
         'outtmpl': output_template,
         'cookiefile': cookie_file if cookie_file.exists() else None,
         'noplaylist': True,
@@ -102,14 +125,21 @@ async def _download_local_tiktok(url: str) -> Tuple[Path, Optional[Path], Dict]:
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         
-        vcodec = info.get('vcodec', 'unknown').lower()
+        # Дополнительная проверка скачанного файла
+        vcodec = info.get('vcodec', 'unknown')
+        if vcodec: vcodec = vcodec.lower()
+        else: vcodec = 'unknown'
+
         path = Path(ydl.prepare_filename(info))
         
-        # Проверка кодека: если не AVC/H264, то VPS не сможет его обработать (нет ffmpeg)
-        if 'avc' not in vcodec and 'h264' not in vcodec and 'none' not in vcodec:
+        # Строгая проверка кодека
+        is_safe_codec = 'avc' in vcodec or 'h264' in vcodec
+        
+        if not is_safe_codec:
+            logging.info(f"TikTok downloaded codec '{vcodec}' is suspect. Offloading to convert.")
             if path.exists():
                 path.unlink()
-            raise ValueError(f"Codec {vcodec} is not supported locally (requires conversion)")
+            raise ValueError(f"Codec {vcodec} requires conversion (HEVC/Unknown)")
             
         metadata = {
             'title': info.get('title', 'TikTok Video'),
@@ -123,10 +153,9 @@ async def _download_local_tiktok(url: str) -> Tuple[Path, Optional[Path], Dict]:
         return path, None, metadata
 
 
-async def _download_remote_grpc(url: str, is_music: bool, video_height: int) -> Tuple[Path, Optional[Path], Dict]:
+async def _download_remote_grpc(url: str, is_music: bool, video_height: int, progress_callback: Optional[Callable] = None) -> Tuple[Path, Optional[Path], Dict]:
     """Отправляет задачу на домашний сервер"""
     
-    # Используем переменную из конфига, где должен быть прописан IP и порт 50057
     async with grpc.aio.insecure_channel(HOME_SERVER_ADDRESS) as channel:
         stub = pb2_grpc.DownloaderServiceStub(channel)
         
@@ -152,6 +181,24 @@ async def _download_remote_grpc(url: str, is_music: bool, video_height: int) -> 
         thumb_file = None
         has_thumb = False
         
+        # --- ЗАПУСК ФОНОВОЙ ЗАДАЧИ С ШУТКАМИ ---
+        status_task = None
+        if progress_callback:
+            async def funny_status_loop():
+                try:
+                    while True:
+                        msg = random.choice(FUNNY_STATUSES)
+                        try:
+                            # Обновленный формат сообщения
+                            await progress_callback(f"Downloading... It can take more time\n\n⏳ {msg}")
+                        except Exception:
+                            pass 
+                        await asyncio.sleep(3)
+                except asyncio.CancelledError:
+                    pass
+
+            status_task = asyncio.create_task(funny_status_loop())
+
         try:
             media_file = open(temp_media, 'wb')
             thumb_file = open(temp_thumb, 'wb')
@@ -201,3 +248,31 @@ async def _download_remote_grpc(url: str, is_music: bool, video_height: int) -> 
             if temp_media.exists(): temp_media.unlink()
             if temp_thumb.exists(): temp_thumb.unlink()
             raise e
+        finally:
+            if status_task:
+                status_task.cancel()
+
+# --- ФУНКЦИИ ДЛЯ АДМИНКИ (ВЕРСИИ) ---
+
+async def get_worker_version() -> str:
+    """Запрашивает версию yt-dlp у воркера"""
+    try:
+        async with grpc.aio.insecure_channel(HOME_SERVER_ADDRESS) as channel:
+            stub = pb2_grpc.DownloaderServiceStub(channel)
+            response = await stub.GetVersion(pb2.Empty(), timeout=2)
+            return response.version
+    except Exception as e:
+        return "Offline 🔴"
+
+async def update_worker_ytdlp() -> str:
+    """Отправляет команду обновления воркеру"""
+    try:
+        async with grpc.aio.insecure_channel(HOME_SERVER_ADDRESS) as channel:
+            stub = pb2_grpc.DownloaderServiceStub(channel)
+            response = await stub.UpdateYtdlp(pb2.Empty(), timeout=60)
+            if response.success:
+                return f"✅ Worker updated to {response.new_version}"
+            else:
+                return f"❌ Worker update failed: {response.message}"
+    except Exception as e:
+        return f"❌ Worker connection failed: {str(e)}"

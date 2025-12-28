@@ -3,15 +3,32 @@ syntax = "proto3";
 package downloader;
 
 service DownloaderService {
-  // Запрос на скачивание. Возвращает поток данных (метаданные -> обложка -> файл)
   rpc DownloadMedia (DownloadRequest) returns (stream DownloadResponse) {}
+  
+  // Новые методы
+  rpc GetVersion (Empty) returns (VersionResponse) {}
+  rpc UpdateYtdlp (Empty) returns (UpdateResponse) {}
 }
 
+// Пустое сообщение для запросов без параметров
+message Empty {}
+
+message VersionResponse {
+  string version = 1;
+}
+
+message UpdateResponse {
+  bool success = 1;
+  string message = 2;
+  string new_version = 3;
+}
+
+// ... (остальные сообщения DownloadRequest/Response оставьте как были) ...
 message DownloadRequest {
   string url = 1;
   bool is_music = 2;
   int32 video_height = 3;
-  string cookies_content = 4; // Содержимое cookies.txt для передачи авторизации
+  string cookies_content = 4;
 }
 
 message Metadata {
@@ -26,8 +43,8 @@ message Metadata {
 
 message DownloadResponse {
   oneof payload {
-    Metadata metadata = 1;      // Первым сообщением придут метаданные
-    bytes file_chunk = 2;       // Куски основного файла (видео или аудио)
-    bytes thumbnail_chunk = 3;  // Куски файла обложки (thumbnail)
+    Metadata metadata = 1;
+    bytes file_chunk = 2;
+    bytes thumbnail_chunk = 3;
   }
 }

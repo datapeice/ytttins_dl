@@ -39,14 +39,36 @@ class DownloaderServiceStub(object):
                 request_serializer=protos_dot_downloader__pb2.DownloadRequest.SerializeToString,
                 response_deserializer=protos_dot_downloader__pb2.DownloadResponse.FromString,
                 _registered_method=True)
+        self.GetVersion = channel.unary_unary(
+                '/downloader.DownloaderService/GetVersion',
+                request_serializer=protos_dot_downloader__pb2.Empty.SerializeToString,
+                response_deserializer=protos_dot_downloader__pb2.VersionResponse.FromString,
+                _registered_method=True)
+        self.UpdateYtdlp = channel.unary_unary(
+                '/downloader.DownloaderService/UpdateYtdlp',
+                request_serializer=protos_dot_downloader__pb2.Empty.SerializeToString,
+                response_deserializer=protos_dot_downloader__pb2.UpdateResponse.FromString,
+                _registered_method=True)
 
 
 class DownloaderServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def DownloadMedia(self, request, context):
-        """Запрос на скачивание. Возвращает поток данных (метаданные -> обложка -> файл)
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetVersion(self, request, context):
+        """Новые методы
         """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def UpdateYtdlp(self, request, context):
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -58,6 +80,16 @@ def add_DownloaderServiceServicer_to_server(servicer, server):
                     servicer.DownloadMedia,
                     request_deserializer=protos_dot_downloader__pb2.DownloadRequest.FromString,
                     response_serializer=protos_dot_downloader__pb2.DownloadResponse.SerializeToString,
+            ),
+            'GetVersion': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetVersion,
+                    request_deserializer=protos_dot_downloader__pb2.Empty.FromString,
+                    response_serializer=protos_dot_downloader__pb2.VersionResponse.SerializeToString,
+            ),
+            'UpdateYtdlp': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpdateYtdlp,
+                    request_deserializer=protos_dot_downloader__pb2.Empty.FromString,
+                    response_serializer=protos_dot_downloader__pb2.UpdateResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -87,6 +119,60 @@ class DownloaderService(object):
             '/downloader.DownloaderService/DownloadMedia',
             protos_dot_downloader__pb2.DownloadRequest.SerializeToString,
             protos_dot_downloader__pb2.DownloadResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetVersion(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/downloader.DownloaderService/GetVersion',
+            protos_dot_downloader__pb2.Empty.SerializeToString,
+            protos_dot_downloader__pb2.VersionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UpdateYtdlp(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/downloader.DownloaderService/UpdateYtdlp',
+            protos_dot_downloader__pb2.Empty.SerializeToString,
+            protos_dot_downloader__pb2.UpdateResponse.FromString,
             options,
             channel_credentials,
             insecure,
