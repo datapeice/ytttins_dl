@@ -2,6 +2,7 @@ import asyncio
 import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.fsm.storage.memory import MemoryStorage
 from config import BOT_TOKEN
 from services.logger import setup_logging
 from handlers import user, admin
@@ -12,7 +13,8 @@ async def main():
 
     session = AiohttpSession(timeout=300)
     bot = Bot(token=BOT_TOKEN, session=session)
-    dp = Dispatcher()
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
 
     # Register routers
     dp.include_router(admin.router)

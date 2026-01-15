@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from config import ADMIN_USER_ID, DATA_DIR
@@ -15,6 +17,9 @@ from database.models import Cookie, DownloadHistory
 from services.downloader import get_worker_version, update_worker_ytdlp
 
 router = Router()
+
+class BroadcastStates(StatesGroup):
+    waiting_for_message = State()
 
 def get_back_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -93,6 +98,7 @@ async def send_admin_panel(message: types.Message):
         InlineKeyboardButton(text="➖ Remove User", callback_data="admin:remove_user")],
         [InlineKeyboardButton(text="📊 Statistics", callback_data="admin:stats"),
         InlineKeyboardButton(text="📜 History", callback_data="admin:history")],
+        [InlineKeyboardButton(text="📨 Broadcast Message", callback_data="admin:broadcast")],
         [InlineKeyboardButton(text="🍪 Update Cookies", callback_data="admin:update_cookies"),
         InlineKeyboardButton(text="🔄 Update ALL yt-dlp", callback_data="admin:update_ytdlp")],
         [InlineKeyboardButton(text="📂 Get Logs", callback_data="admin:get_logs"),
@@ -116,6 +122,108 @@ async def send_admin_panel(message: types.Message):
         stats_message += "No active users in the last 7 days."
 
     await message.answer(stats_message, reply_markup=keyboard)
+
+# Broadcast message handlers - Must be before general admin handler
+@router.callback_query(F.data == "admin:broadcast")
+async def start_broadcast(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.username != ADMIN_USER_ID:
+        await callback.answer("You don't have permission.", show_alert=True)
+        return
+    
+    await callback.message.answer(
+        "📨 *Broadcast Message*\n\n"
+        "Send me the message you want to broadcast to all users who have downloaded at least one video.\n"
+        "You can send text, photo with caption, or video with caption.\n\n"
+        "Send /cancel to cancel.",
+        parse_mode="Markdown"
+    )
+    await state.set_state(BroadcastStates.waiting_for_message)
+    try:
+        await callback.answer()
+    except Exception:
+        pass  # Ignore timeout errors
+
+@router.callback_query(F.data.startswith("broadcast:"))
+async def handle_broadcast_confirm(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.username != ADMIN_USER_ID:
+        await callback.answer("You don't have permission.", show_alert=True)
+        return
+    
+    action = callback.data.split(":")[1]
+    
+    if action == "cancel":
+        await state.clear()
+        await callback.message.edit_text("❌ Broadcast cancelled.")
+        try:
+            await callback.answer()
+        except Exception:
+            pass
+        return
+    
+    if action == "confirm":
+        data = await state.get_data()
+        message_id = data.get("message_id")
+        user_ids = data.get("user_ids", [])
+        
+        if not user_ids:
+            await callback.message.edit_text("❌ No users to broadcast to.")
+            await state.clear()
+            await callback.answer()
+            return
+        
+        # Get the original message
+        chat_id = callback.message.chat.id
+        bot = callback.message.bot
+        
+        status_msg = await callback.message.edit_text(
+            f"📤 Broadcasting to {len(user_ids)} users...\n"
+            f"Progress: 0/{len(user_ids)}"
+        )
+        
+        success_count = 0
+        fail_count = 0
+        
+        for i, user_id in enumerate(user_ids):
+            try:
+                # Forward or copy the message
+                await bot.copy_message(
+                    chat_id=user_id,
+                    from_chat_id=chat_id,
+                    message_id=message_id
+                )
+                success_count += 1
+            except Exception as e:
+                logging.warning(f"Failed to send broadcast to user {user_id}: {e}")
+                fail_count += 1
+            
+            # Update progress every 10 users
+            if (i + 1) % 10 == 0 or (i + 1) == len(user_ids):
+                try:
+                    await status_msg.edit_text(
+                        f"📤 Broadcasting to {len(user_ids)} users...\n"
+                        f"Progress: {i + 1}/{len(user_ids)}\n"
+                        f"✅ Sent: {success_count}\n"
+                        f"❌ Failed: {fail_count}"
+                    )
+                except:
+                    pass
+            
+            # Small delay to avoid rate limits
+            await asyncio.sleep(0.05)
+        
+        await status_msg.edit_text(
+            f"✅ *Broadcast Complete!*\n\n"
+            f"📊 Total users: {len(user_ids)}\n"
+            f"✅ Sent: {success_count}\n"
+            f"❌ Failed: {fail_count}",
+            parse_mode="Markdown"
+        )
+        
+        await state.clear()
+        try:
+            await callback.answer()
+        except Exception:
+            pass
 
 @router.callback_query(F.data.startswith("admin:"))
 async def handle_admin_callback(callback: types.CallbackQuery):
@@ -199,6 +307,10 @@ async def handle_admin_callback(callback: types.CallbackQuery):
 
     elif action == "update_cookies":
         await callback.message.answer("Please send the `cookies.txt` file now.")
+    
+    elif action == "broadcast":
+        # Let the separate handler deal with this
+        pass
         
     elif action.startswith("history"):
         page = 0
@@ -496,3 +608,60 @@ async def handle_whitelist_add(message: types.Message):
         await message.answer(f"✅ User @{username} has been added to the whitelist.")
     else:
         await message.answer(f"⚠️ User @{username} is already in the whitelist.")
+
+@router.message(Command("cancel"))
+async def cancel_broadcast(message: types.Message, state: FSMContext):
+    if message.from_user.username != ADMIN_USER_ID:
+        return
+    
+    current_state = await state.get_state()
+    if current_state is None:
+        return
+    
+    await state.clear()
+    await message.answer("❌ Broadcast cancelled.")
+
+@router.message(BroadcastStates.waiting_for_message)
+async def process_broadcast(message: types.Message, state: FSMContext):
+    if message.from_user.username != ADMIN_USER_ID:
+        return
+    
+    # Get all unique user IDs who have downloaded
+    user_ids = set()
+    
+    if stats.Session:
+        try:
+            with stats.Session() as session:
+                results = session.query(DownloadHistory.user_id).distinct().all()
+                user_ids = {user_id for (user_id,) in results if user_id}
+        except Exception as e:
+            logging.error(f"Error fetching users from DB: {e}")
+    else:
+        # Fallback to local storage - active_users is Dict[date, Set[user_id]]
+        for date, users in stats.active_users.items():
+            user_ids.update(users)
+    
+    if not user_ids:
+        await message.answer("❌ No users found to broadcast to.")
+        await state.clear()
+        return
+    
+    # Confirm broadcast
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Send to all", callback_data="broadcast:confirm"),
+            InlineKeyboardButton(text="❌ Cancel", callback_data="broadcast:cancel")
+        ]
+    ])
+    
+    await state.update_data(
+        message_id=message.message_id,
+        user_ids=list(user_ids)
+    )
+    
+    await message.answer(
+        f"📊 Ready to broadcast to *{len(user_ids)} users*.\n\n"
+        f"Confirm to proceed:",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )

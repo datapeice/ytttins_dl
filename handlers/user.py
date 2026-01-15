@@ -1,6 +1,8 @@
 import uuid
 import re
 import logging
+import asyncio
+from pathlib import Path
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -8,9 +10,24 @@ from aiogram.types import InlineKeyboardButton
 from services.downloader import download_media, get_platform, is_youtube_music
 from database.storage import stats
 from services.logger import download_logger
+from config import DOWNLOADS_DIR
 
 router = Router()
 url_cache = {}
+
+def format_caption(metadata: dict, platform: str) -> str:
+    """Generate unified caption format for all platforms."""
+    uploader = metadata.get('uploader', 'Unknown')
+    url = metadata.get('webpage_url', '')
+    
+    # Escape HTML special characters in uploader name
+    uploader = uploader.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    
+    caption = (
+        f"👤 {uploader} | <a href=\"{url}\">Link</a>\n"
+        f"Developed by @datapeice"
+    )
+    return caption
 
 
 @router.message(Command("start"))
@@ -66,6 +83,12 @@ async def handle_url(message: types.Message):
         is_music = is_youtube_music(message.text)
         file_path, thumbnail_path, metadata = await download_media(message.text, is_music, progress_callback=update_status)
 
+        # Determine title based on file_path type
+        if isinstance(file_path, list):
+            title = metadata.get('title', 'TikTok Slideshow')
+        else:
+            title = file_path.stem
+
         stats.add_active_user(message.from_user.id)
         stats.add_download(
             content_type='Music' if is_music else 'Video',
@@ -73,7 +96,7 @@ async def handle_url(message: types.Message):
             username=message.from_user.username or "No username",
             platform=platform,
             url=message.text,
-            title=file_path.stem
+            title=title
         )
 
         user_fullname = message.from_user.full_name
@@ -86,21 +109,57 @@ async def handle_url(message: types.Message):
             f"URL: {message.text}"
         )
 
-        if file_path.exists():
+        if isinstance(file_path, list):
+            await update_status("📤 Uploading slideshow to Telegram...")
+            
+            # Separate images and audio
+            image_files = [f for f in file_path if f.suffix.lower() in ['.jpg', '.jpeg', '.png', '.webp']]
+            audio_files = [f for f in file_path if f.suffix.lower() in ['.mp3', '.m4a', '.wav']]
+            
+            # Prepare unified caption
+            caption = format_caption(metadata, platform)
+
+            # Send images as media group
+            if image_files:
+                media_group = []
+                for i, photo_path in enumerate(image_files):
+                    # Attach caption only to the first item
+                    media_item = types.InputMediaPhoto(
+                        media=types.FSInputFile(photo_path),
+                        caption=caption if i == 0 else "",
+                        parse_mode='HTML' if i == 0 else None
+                    )
+                    media_group.append(media_item)
+
+                # Split into chunks of 10 (Telegram limit)
+                chunk_size = 10
+                for i in range(0, len(media_group), chunk_size):
+                    chunk = media_group[i:i + chunk_size]
+                    await message.answer_media_group(chunk)
+            
+            # Send audio separately if available
+            if audio_files:
+                for audio_path in audio_files:
+                    try:
+                        await message.answer_audio(
+                            types.FSInputFile(audio_path)
+                        )
+                    except Exception as e:
+                        logging.error(f"Failed to send audio: {e}")
+
+            # Cleanup
+            for photo_path in file_path:
+                try:
+                    photo_path.unlink()
+                except Exception:
+                    pass
+            await status_message.delete()
+
+        elif file_path.exists():
             await update_status("📤 Uploading to Telegram...")
             
-            if platform == "tiktok":
-                caption = (
-                    f"@{metadata.get('uploader')} | <a href=\"{metadata.get('webpage_url')}\">Video link</a>\n"
-                    f"Developed by @datapeice"
-                )
-            else:
-                caption = (
-                    f"🎬 {metadata.get('title')}\n"
-                    f"👤 {metadata.get('uploader')}\n"
-                    f"🔗 {metadata.get('webpage_url')}\n\n"
-                    f"Developed by @datapeice"
-                )
+            # Use unified caption format
+            caption = format_caption(metadata, platform)
 
             if is_music:
                 if thumbnail_path:
@@ -108,13 +167,15 @@ async def handle_url(message: types.Message):
                         types.FSInputFile(file_path), 
                         thumbnail=types.FSInputFile(thumbnail_path),
                         duration=metadata.get('duration'),
-                        caption=caption
+                        caption=caption,
+                        parse_mode='HTML'
                     )
                 else:
                     await message.answer_audio(
                         types.FSInputFile(file_path),
                         duration=metadata.get('duration'),
-                        caption=caption
+                        caption=caption,
+                        parse_mode='HTML'
                     )
             else:
                 video_kwargs = {
@@ -122,7 +183,7 @@ async def handle_url(message: types.Message):
                     'duration': metadata.get('duration'),
                     'supports_streaming': True,
                     'caption': caption,
-                    'parse_mode': 'HTML' if platform == "tiktok" else None
+                    'parse_mode': 'HTML'
                 }
                 
                 # if metadata.get('width') and metadata.get('height'):
@@ -156,12 +217,15 @@ async def handle_url(message: types.Message):
         elif "Sign in to confirm" in error_msg:
             user_error = "⚠️ YouTube requires authentication (cookies). Please contact the bot admin."
         else:
-            user_error = f"❌ An error occurred: {error_msg}"
+            user_error = (
+                f"```error\n{error_msg}\n```\n\n"
+                f"Contact with developer @datapeice"
+            )
         
         if 'status_message' in locals():
-            await status_message.edit_text(user_error)
+            await status_message.edit_text(user_error, parse_mode='Markdown' if '```' in user_error else None)
         else:
-            await message.answer(user_error)
+            await message.answer(user_error, parse_mode='Markdown' if '```' in user_error else None)
 
 @router.callback_query(F.data.startswith("format:"))
 async def handle_format_selection(callback: types.CallbackQuery):
@@ -223,25 +287,22 @@ async def handle_format_selection(callback: types.CallbackQuery):
             if file_path.exists():
                 await update_status("📤 Uploading to Telegram...")
                 
-                caption = (
-                    f"🎬 {metadata.get('title')}\n"
-                    f"👤 {metadata.get('uploader')}\n"
-                    f"🔗 {metadata.get('webpage_url')}\n\n"
-                    f"Developed by @datapeice"
-                )
+                caption = format_caption(metadata, 'youtube')
 
                 if thumbnail_path:
                     await callback.message.answer_audio(
                         types.FSInputFile(file_path), 
                         thumbnail=types.FSInputFile(thumbnail_path),
                         duration=metadata.get('duration'),
-                        caption=caption
+                        caption=caption,
+                        parse_mode='HTML'
                     )
                 else:
                     await callback.message.answer_audio(
                         types.FSInputFile(file_path),
                         duration=metadata.get('duration'),
-                        caption=caption
+                        caption=caption,
+                        parse_mode='HTML'
                     )
                 
                 file_path.unlink()
@@ -260,9 +321,12 @@ async def handle_format_selection(callback: types.CallbackQuery):
             elif "Unsupported URL" in error_msg:
                 user_error = "❌ This URL is not supported."
             else:
-                user_error = f"❌ An error occurred: {error_msg}"
+                user_error = (
+                    f"```error\n{error_msg}\n```\n\n"
+                    f"Contact with developer @datapeice"
+                )
             
-            await status_message.edit_text(user_error)
+            await status_message.edit_text(user_error, parse_mode='Markdown' if '```' in user_error else None)
 
     except Exception as e:
         logging.error(f"Error in callback handling: {str(e)}")
@@ -316,18 +380,14 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
             if file_path.exists():
                 await update_status("📤 Uploading to Telegram...")
                 
-                caption = (
-                    f"🎬 {metadata.get('title')}\n"
-                    f"👤 {metadata.get('uploader')}\n"
-                    f"🔗 {metadata.get('webpage_url')}\n\n"
-                    f"Developed by @datapeice"
-                )
+                caption = format_caption(metadata, 'youtube')
 
                 video_kwargs = {
                     'video': types.FSInputFile(file_path),
                     'duration': metadata.get('duration'),
                     'supports_streaming': True,
-                    'caption': caption
+                    'caption': caption,
+                    'parse_mode': 'HTML'
                 }
                 
                 # if metadata.get('width') and metadata.get('height'):
@@ -356,9 +416,12 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
             elif "Unsupported URL" in error_msg:
                 user_error = "❌ This URL is not supported."
             else:
-                user_error = f"❌ An error occurred: {error_msg}"
+                user_error = (
+                    f"```error\n{error_msg}\n```\n\n"
+                    f"Contact with developer @datapeice"
+                )
             
-            await status_message.edit_text(user_error)
+            await status_message.edit_text(user_error, parse_mode='Markdown' if '```' in user_error else None)
 
     except Exception as e:
         logging.error(f"Error in resolution callback: {str(e)}")
