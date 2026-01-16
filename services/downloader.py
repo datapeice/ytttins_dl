@@ -116,8 +116,22 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             return await _download_local_tiktok(url)
         except Exception as e:
             # Сюда мы попадем, если видео HEVC (yt-dlp выдаст ошибку или мы сами кинем исключение)
-            logging.warning(f"Local TikTok failed or HEVC detected ({e}), switching to Home Server...")
-            # Fallback к remote download
+            error_msg = str(e)
+            logging.warning(f"Local TikTok failed ({error_msg})")
+            
+            # If yt-dlp fails with "Unable to extract", try tikwm first (faster and more reliable)
+            if "Unable to extract" in error_msg or "ERROR: [TikTok]" in error_msg:
+                logging.info("Trying tikwm API before Home Server...")
+                try:
+                    if progress_callback: await progress_callback("📥 Downloading...")
+                    return await _download_tiktok_tikwm(url)
+                except Exception as tikwm_error:
+                    logging.warning(f"tikwm failed ({tikwm_error}), switching to Home Server as last resort...")
+            else:
+                logging.info("Looks like HEVC video, switching to Home Server...")
+            
+            # Fallback to remote download
+            return await _download_remote_grpc(url, is_music, video_height, progress_callback)
 
     # 3. YouTube/Instagram/Fallback -> Домашний сервер
     return await _download_remote_grpc(url, is_music, video_height, progress_callback)
@@ -301,6 +315,98 @@ async def _download_remote_grpc(url: str, is_music: bool, video_height: int, pro
         finally:
             if status_task:
                 status_task.cancel()
+
+async def _download_tiktok_tikwm(url: str) -> Tuple[Path, Optional[Path], Dict]:
+    """Fallback: download TikTok video using tikwm.com API when yt-dlp fails"""
+    import requests
+    import subprocess
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json, text/plain, */*',
+    }
+    
+    api_url = 'https://www.tikwm.com/api/'
+    params = {'url': url, 'hd': 1}
+    
+    response = requests.get(api_url, params=params, headers=headers, timeout=15)
+    
+    if response.status_code != 200:
+        raise Exception(f"tikwm API returned status {response.status_code}")
+    
+    data = response.json()
+    
+    if data.get('code') != 0:
+        raise Exception(f"tikwm API error: {data.get('msg', 'Unknown error')}")
+    
+    result = data.get('data', {})
+    
+    # Get video URL (prefer HD, but tikwm may not have h264)
+    video_url = result.get('hdplay') or result.get('play')
+    
+    if not video_url:
+        raise Exception("No video URL found in tikwm response")
+    
+    # Extract metadata
+    author = result.get('author', {}).get('unique_id', 'Unknown')
+    title = result.get('title', 'TikTok Video')
+    duration = result.get('duration', 0)
+    
+    logging.info(f"tikwm: Downloading video from {video_url[:80]}...")
+    
+    # Download video
+    unique_id = uuid.uuid4().hex[:8]
+    video_path = DOWNLOADS_DIR / f"tiktok_{unique_id}.mp4"
+    
+    video_response = requests.get(video_url, headers={'User-Agent': headers['User-Agent']}, stream=True, timeout=30)
+    
+    if video_response.status_code != 200:
+        raise Exception(f"Failed to download video: status {video_response.status_code}")
+    
+    with open(video_path, 'wb') as f:
+        for chunk in video_response.iter_content(chunk_size=8192):
+            f.write(chunk)
+    
+    logging.info(f"tikwm: Video downloaded successfully to {video_path}")
+    
+    # CHECK CODEC - ONLY H264 ALLOWED!
+    try:
+        probe_cmd = [
+            'ffprobe', '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=codec_name',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            str(video_path)
+        ]
+        result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=5)
+        codec = result.stdout.strip().lower()
+        
+        logging.info(f"tikwm: Detected codec: {codec}")
+        
+        # If HEVC - delete and throw exception to trigger home server fallback
+        if codec in ['hevc', 'h265']:
+            logging.warning(f"tikwm returned HEVC video, need conversion. Deleting and switching to Home Server...")
+            video_path.unlink()
+            raise Exception(f"Video codec is {codec}, requires conversion on Home Server")
+            
+    except subprocess.TimeoutExpired:
+        logging.error("ffprobe timeout checking codec")
+        video_path.unlink()
+        raise Exception("Failed to verify codec")
+    except FileNotFoundError:
+        logging.error("ffprobe not found - cannot verify codec")
+        # Don't fail if ffprobe missing, but log warning
+        logging.warning("Skipping codec check - ffprobe not available")
+    
+    metadata = {
+        'title': title,
+        'uploader': author,
+        'webpage_url': url,
+        'duration': duration,
+        'ext': 'mp4'
+    }
+    
+    return video_path, None, metadata
 
 # --- ФУНКЦИИ ДЛЯ АДМИНКИ (ВЕРСИИ) ---
 
