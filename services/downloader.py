@@ -109,29 +109,28 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     if is_music:
         return await _download_remote_grpc(url, is_music, video_height, progress_callback)
 
-    # 2. TikTok -> Локально на VPS
+    # 2. TikTok -> Приоритет: yt-dlp локально → tikwm (без конвертации) → домашний сервер (крайний случай)
     if platform == "tiktok":
+        # Сначала пробуем yt-dlp локально
         try:
             if progress_callback: await progress_callback("⏳ Starting...") 
             return await _download_local_tiktok(url)
         except Exception as e:
-            # Сюда мы попадем, если видео HEVC (yt-dlp выдаст ошибку или мы сами кинем исключение)
             error_msg = str(e)
-            logging.warning(f"Local TikTok failed ({error_msg})")
+            logging.warning(f"Local yt-dlp failed: {error_msg}")
             
-            # If yt-dlp fails with "Unable to extract", try tikwm first (faster and more reliable)
-            if "Unable to extract" in error_msg or "ERROR: [TikTok]" in error_msg:
-                logging.info("Trying tikwm API before Home Server...")
-                try:
-                    if progress_callback: await progress_callback("📥 Downloading...")
-                    return await _download_tiktok_tikwm(url)
-                except Exception as tikwm_error:
-                    logging.warning(f"tikwm failed ({tikwm_error}), switching to Home Server as last resort...")
-            else:
-                logging.info("Looks like HEVC video, switching to Home Server...")
-            
-            # Fallback to remote download
-            return await _download_remote_grpc(url, is_music, video_height, progress_callback)
+            # Если yt-dlp не смог скачать - пробуем tikwm (быстро и надёжно)
+            logging.info("Trying tikwm API (without conversion)...")
+            try:
+                if progress_callback: await progress_callback("📥 Downloading...")
+                return await _download_tiktok_tikwm(url)
+            except Exception as tikwm_error:
+                logging.warning(f"tikwm also failed: {tikwm_error}")
+                
+                # Только в крайнем случае идём на домашний сервер (с конвертацией)
+                logging.info("Last resort: using Home Server with conversion...")
+                if progress_callback: await progress_callback("🏠 Using Home Server...")
+                return await _download_remote_grpc(url, is_music, video_height, progress_callback)
 
     # 3. YouTube/Instagram/Fallback -> Домашний сервер
     return await _download_remote_grpc(url, is_music, video_height, progress_callback)
@@ -200,18 +199,21 @@ async def _download_local_tiktok(url: str) -> Tuple[Union[Path, List[Path]], Opt
         if is_slideshow:
             return downloaded_files, None, metadata
         
-        # Video handling
+        # Video handling - проверяем кодек, только H264 разрешён для yt-dlp
         video_files = [f for f in downloaded_files if f.suffix in ['.mp4', '.mov']]
         if video_files:
             path = video_files[0]
             vcodec = info.get('vcodec', 'unknown')
             if vcodec: vcodec = vcodec.lower()
             
-            is_safe_codec = 'avc' in vcodec or 'h264' in vcodec
-            if not is_safe_codec and 'unknown' not in vcodec and info.get('_type') != 'playlist':
+            # Только H264/AVC допустимы для локального yt-dlp
+            is_h264 = 'avc' in vcodec or 'h264' in vcodec
+            if not is_h264 and 'unknown' not in vcodec:
+                # Удаляем файл и бросаем исключение для fallback на tikwm
                 for f in downloaded_files:
                     if f.exists(): f.unlink()
-                raise ValueError(f"Codec {vcodec} requires conversion (HEVC/Unknown)")
+                raise ValueError(f"Codec {vcodec} not H264, trying tikwm fallback")
+            
             return path, None, metadata
             
         return downloaded_files[0], None, metadata
@@ -369,34 +371,8 @@ async def _download_tiktok_tikwm(url: str) -> Tuple[Path, Optional[Path], Dict]:
     
     logging.info(f"tikwm: Video downloaded successfully to {video_path}")
     
-    # CHECK CODEC - ONLY H264 ALLOWED!
-    try:
-        probe_cmd = [
-            'ffprobe', '-v', 'error',
-            '-select_streams', 'v:0',
-            '-show_entries', 'stream=codec_name',
-            '-of', 'default=noprint_wrappers=1:nokey=1',
-            str(video_path)
-        ]
-        result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=5)
-        codec = result.stdout.strip().lower()
-        
-        logging.info(f"tikwm: Detected codec: {codec}")
-        
-        # If HEVC - delete and throw exception to trigger home server fallback
-        if codec in ['hevc', 'h265']:
-            logging.warning(f"tikwm returned HEVC video, need conversion. Deleting and switching to Home Server...")
-            video_path.unlink()
-            raise Exception(f"Video codec is {codec}, requires conversion on Home Server")
-            
-    except subprocess.TimeoutExpired:
-        logging.error("ffprobe timeout checking codec")
-        video_path.unlink()
-        raise Exception("Failed to verify codec")
-    except FileNotFoundError:
-        logging.error("ffprobe not found - cannot verify codec")
-        # Don't fail if ffprobe missing, but log warning
-        logging.warning("Skipping codec check - ffprobe not available")
+    # Не проверяем кодек - принимаем любой формат (H264 или HEVC)
+    # Если Telegram не поддержит HEVC, пользователь увидит ошибку и попробует снова
     
     metadata = {
         'title': title,
