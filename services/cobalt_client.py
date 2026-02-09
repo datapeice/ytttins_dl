@@ -1,0 +1,251 @@
+import logging
+import aiohttp
+from pathlib import Path
+from typing import Optional, Dict, List, Tuple
+from config import COBALT_API_URL, COBALT_API_KEY, HTTP_PROXY, HTTPS_PROXY, DOWNLOADS_DIR
+
+
+class CobaltClient:
+    """
+    Клиент для работы с Cobalt API.
+    Прокси настраивается только для запросов к Cobalt, не влияет на бота.
+    """
+    
+    def __init__(self):
+        self.api_url = COBALT_API_URL.rstrip('/')
+        self.api_key = COBALT_API_KEY
+        self.proxy = None  # Прокси не используется - Cobalt воркер сам обращается к сайтам
+        
+        logging.info(f"Cobalt client: using external API at {self.api_url}")
+    
+    def _mask_proxy(self, proxy_url: str) -> str:
+        """Маскирует credentials в proxy URL для логирования"""
+        try:
+            if '@' in proxy_url:
+                protocol, rest = proxy_url.split('://', 1)
+                credentials, host = rest.split('@', 1)
+                return f"{protocol}://***:***@{host}"
+            return proxy_url
+        except:
+            return "***"
+    
+    async def _make_request(self, url: str, method: str = "GET", json_data: Dict = None) -> Dict:
+        """
+        Выполняет HTTP запрос к Cobalt API через прокси (если настроен).
+        """
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        
+        if self.api_key:
+            headers["Authorization"] = f"Api-Key {self.api_key}"
+        
+        # Создаем connector с поддержкой прокси
+        connector = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=300)  # 5 минут для больших файлов
+        
+        try:
+            async with aiohttp.ClientSession(
+                connector=connector, 
+                timeout=timeout
+            ) as session:
+                if method == "POST":
+                    async with session.post(
+                        url, 
+                        json=json_data, 
+                        headers=headers,
+                        proxy=self.proxy  # Прокси только для Cobalt запросов
+                    ) as response:
+                        if response.status == 200:
+                            return await response.json()
+                        else:
+                            error_text = await response.text()
+                            logging.error(f"Cobalt API error {response.status}: {error_text}")
+                            raise Exception(f"Cobalt API returned {response.status}: {error_text}")
+                else:
+                    async with session.get(
+                        url, 
+                        headers=headers,
+                        proxy=self.proxy
+                    ) as response:
+                        if response.status == 200:
+                            return await response.json()
+                        else:
+                            error_text = await response.text()
+                            logging.error(f"Cobalt API error {response.status}: {error_text}")
+                            raise Exception(f"Cobalt API returned {response.status}")
+        except Exception as e:
+            logging.error(f"Request to Cobalt failed: {str(e)}")
+            raise
+    
+    async def download_media(
+        self, 
+        url: str, 
+        quality: str = "1080",
+        is_audio: bool = False
+    ) -> Tuple[Optional[Path], Optional[Path], Dict]:
+        """
+        Загружает медиа через Cobalt API.
+        
+        Args:
+            url: URL видео/аудио
+            quality: Качество видео (max, 2160, 1440, 1080, 720, 480, 360, 240, 144)
+            is_audio: True если нужно скачать только аудио
+        
+        Returns:
+            (file_path, thumbnail_path, metadata)
+        """
+        logging.info(f"Cobalt: downloading {url} (quality={quality}, audio={is_audio})")
+        
+        request_data = {
+            "url": url,
+            "videoQuality": quality,
+            "youtubeVideoCodec": "h264",  # Всегда запрашиваем H.264 для Telegram
+            "downloadMode": "audio" if is_audio else "auto",
+            "alwaysProxy": False  # Получаем прямые ссылки, не туннель
+        }
+        
+        if is_audio:
+            request_data["audioFormat"] = "mp3"
+            request_data["audioBitrate"] = "320"
+        
+        try:
+            response = await self._make_request(
+                f"{self.api_url}/",
+                method="POST",
+                json_data=request_data
+            )
+            
+            status = response.get("status")
+            logging.info(f"Cobalt response status: {status}")
+            
+            if status == "error":
+                error_code = response.get("error", {}).get("code", "unknown")
+                error_msg = response.get("error", {}).get("context", "Unknown error")
+                logging.error(f"Cobalt error: {error_code} - {error_msg}")
+                raise Exception(f"Cobalt error: {error_msg}")
+            
+            elif status == "redirect":
+                # Прямая ссылка на файл
+                file_url = response.get("url")
+                return await self._download_file(file_url, response)
+            
+            elif status == "tunnel":
+                # Cobalt проксирует файл через /tunnel
+                tunnel_url = response.get("url")
+                return await self._download_file(tunnel_url, response)
+            
+            elif status == "picker":
+                # Множественные файлы (например, TikTok слайдшоу)
+                return await self._handle_picker(response)
+            
+            elif status == "local-processing":
+                # Требуется локальная обработка (merge audio+video)
+                logging.warning("Cobalt returned local-processing, needs manual FFmpeg merge")
+                raise Exception("Local processing not implemented yet, use fallback")
+            
+            else:
+                raise Exception(f"Unknown Cobalt status: {status}")
+        
+        except Exception as e:
+            logging.error(f"Cobalt download failed: {str(e)}")
+            raise
+    
+    async def _download_file(
+        self, 
+        file_url: str, 
+        metadata: Dict
+    ) -> Tuple[Path, Optional[Path], Dict]:
+        """
+        Скачивает файл по URL (redirect или tunnel).
+        """
+        import uuid
+        
+        filename = metadata.get("filename", f"video_{uuid.uuid4().hex[:8]}.mp4")
+        # Очистка имени файла от недопустимых символов
+        filename = "".join(c for c in filename if c.isalnum() or c in "._- ")
+        
+        file_path = DOWNLOADS_DIR / filename
+        
+        logging.info(f"Downloading file from: {file_url}")
+        
+        connector = aiohttp.TCPConnector(ssl=False)
+        timeout = aiohttp.ClientTimeout(total=600)  # 10 минут
+        
+        try:
+            async with aiohttp.ClientSession(
+                connector=connector, 
+                timeout=timeout
+            ) as session:
+                async with session.get(file_url, proxy=self.proxy) as response:
+                    if response.status != 200:
+                        raise Exception(f"Failed to download file: HTTP {response.status}")
+                    
+                    # Скачиваем файл chunked
+                    with open(file_path, 'wb') as f:
+                        async for chunk in response.content.iter_chunked(8192):
+                            f.write(chunk)
+            
+            if not file_path.exists() or file_path.stat().st_size == 0:
+                raise Exception("Downloaded file is empty or doesn't exist")
+            
+            logging.info(f"File downloaded: {file_path} ({file_path.stat().st_size} bytes)")
+            
+            # Формируем метаданные
+            result_metadata = {
+                "title": filename.rsplit('.', 1)[0],
+                "uploader": "Unknown",
+                "webpage_url": metadata.get("url", ""),
+                "duration": 0,
+                "width": 0,
+                "height": 0,
+                "codec": "h264"  # Cobalt отдает H.264
+            }
+            
+            return file_path, None, result_metadata
+        
+        except Exception as e:
+            if file_path.exists():
+                file_path.unlink()
+            logging.error(f"File download failed: {str(e)}")
+            raise
+    
+    async def _handle_picker(self, response: Dict) -> Tuple[List[Path], Optional[Path], Dict]:
+        """
+        Обрабатывает picker response (множественные файлы).
+        Например, TikTok слайдшоу.
+        """
+        logging.info("Cobalt returned picker (multiple files)")
+        
+        picker_items = response.get("picker", [])
+        if not picker_items:
+            raise Exception("Picker response is empty")
+        
+        # Для TikTok фото - скачиваем все
+        file_paths = []
+        
+        for idx, item in enumerate(picker_items):
+            item_url = item.get("url")
+            if item_url:
+                try:
+                    file_path, _, _ = await self._download_file(
+                        item_url, 
+                        {"filename": f"tiktok_photo_{idx}.jpg"}
+                    )
+                    file_paths.append(file_path)
+                except Exception as e:
+                    logging.error(f"Failed to download picker item {idx}: {e}")
+        
+        metadata = {
+            "title": "TikTok Photos",
+            "uploader": "Unknown",
+            "webpage_url": response.get("url", ""),
+            "count": len(file_paths)
+        }
+        
+        return file_paths, None, metadata
+
+
+# Singleton instance
+cobalt = CobaltClient()

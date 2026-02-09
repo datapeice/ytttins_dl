@@ -1,0 +1,17 @@
+{
+  "name": "ytttins-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for downloading media with embedded Cobalt API",
+  "main": "main.py",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "heroku-prebuild": "echo '[BUILD] Installing Cobalt dependencies...' && cd cobalt/api && pnpm install --frozen-lockfile --ignore-scripts",
+    "heroku-postbuild": "echo '[BUILD] Cobalt dependencies installed'",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

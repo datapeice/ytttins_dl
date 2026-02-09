@@ -1,0 +1,428 @@
+import uuid
+import re
+import logging
+from pathlib import Path
+from aiogram import Router, types, F
+from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardButton
+from services.downloader import download_media, get_platform, is_youtube_music
+from database.storage import stats
+from services.logger import download_logger
+
+router = Router()
+url_cache = {}
+
+def format_caption(metadata: dict, platform: str) -> str:
+    """Generate unified caption format for all platforms."""
+    uploader = metadata.get('uploader', 'Unknown')
+    url = metadata.get('webpage_url', '')
+    
+    # Escape HTML special characters in uploader name
+    uploader = uploader.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    
+    caption = (
+        f"👤 {uploader} | <a href=\"{url}\">Link</a>\n"
+        f"Developed by @datapeice"
+    )
+    return caption
+
+
+@router.message(Command("start"))
+async def cmd_start(message: types.Message):
+    await message.answer(
+        "🎬 <b>Video Downloader Bot</b>\n\n"
+        "Send me a link to download video from:\n\n"
+        "📺 <b>Supported platforms:</b>\n"
+        "• YouTube / YouTube Music\n"
+        "• TikTok (videos & slideshows)\n"
+        "• Instagram (posts, reels, stories)\n"
+        "• Twitter / X\n"
+        "• Reddit\n"
+        "• Facebook\n"
+        "• Vimeo\n"
+        "• Dailymotion\n"
+        "• Twitch (clips & VODs)\n\n"
+        "ℹ️ YouTube Music links download as MP3\n\n"
+        "Developed by @datapeice",
+        parse_mode='HTML'
+    )
+
+@router.message(lambda m: m.text and not m.text.startswith(('/start', '/panel', '/whitelist', '/unwhitelist', 'add @')))
+async def handle_url(message: types.Message):
+    url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
+    
+    if not re.search(url_pattern, message.text):
+        await message.answer("❌ Please send a valid URL")
+        return
+
+    # Whitelist check
+    if stats.whitelisted_users and not stats.is_whitelisted(message.from_user.username):
+        await message.answer("⛔ Sorry, this bot is private. You are not in the whitelist.")
+        return
+
+    try:
+        platform = get_platform(message.text)
+        if platform == "unknown":
+            await message.answer("Sorry, this platform is not supported.")
+            return
+
+        if platform == "youtube" and not is_youtube_music(message.text):
+            request_id = str(uuid.uuid4())[:8]
+            url_cache[request_id] = message.text
+            
+            builder = InlineKeyboardBuilder()
+            builder.add(
+                InlineKeyboardButton(text="🎵 Audio (MP3)", callback_data=f"format:audio:{request_id}"),
+                InlineKeyboardButton(text="🎥 Video", callback_data=f"format:video:{request_id}")
+            )
+            await message.answer("Choose download format:", reply_markup=builder.as_markup())
+            return
+
+        status_message = await message.answer("⏳ Starting...")
+        
+        async def update_status(text: str):
+            try:
+                await status_message.edit_text(text)
+            except Exception:
+                pass
+        
+        is_music = is_youtube_music(message.text)
+        file_path, thumbnail_path, metadata = await download_media(message.text, is_music, progress_callback=update_status)
+
+        # Determine title based on file_path type
+        if isinstance(file_path, list):
+            title = metadata.get('title', 'TikTok Slideshow')
+        else:
+            title = file_path.stem
+
+        stats.add_active_user(message.from_user.id)
+        stats.add_download(
+            content_type='Music' if is_music else 'Video',
+            user_id=message.from_user.id,
+            username=message.from_user.username or "No username",
+            platform=platform,
+            url=message.text,
+            title=title
+        )
+
+        user_fullname = message.from_user.full_name
+        username = message.from_user.username or "No username"
+        user_id = message.from_user.id
+        download_logger.info(
+            f"User: {user_fullname} (@{username}, ID: {user_id}) | "
+            f"Platform: {platform} | "
+            f"Type: {'Music' if is_music else 'Video'} | "
+            f"URL: {message.text}"
+        )
+
+        # Handle slideshow (list of files)
+        if isinstance(file_path, list):
+            await update_status("📤 Uploading slideshow to Telegram...")
+            
+            # Separate images and audio
+            image_files = [f for f in file_path if f.suffix.lower() in ['.jpg', '.jpeg', '.png', '.webp']]
+            audio_files = [f for f in file_path if f.suffix.lower() in ['.mp3', '.m4a', '.wav']]
+            
+            # Prepare unified caption
+            caption = format_caption(metadata, platform)
+
+            # Send images as media group
+            if image_files:
+                media_group = []
+                for i, photo_path in enumerate(image_files):
+                    # Attach caption only to the first item
+                    media_item = types.InputMediaPhoto(
+                        media=types.FSInputFile(photo_path),
+                        caption=caption if i == 0 else "",
+                        parse_mode='HTML' if i == 0 else None
+                    )
+                    media_group.append(media_item)
+
+                # Split into chunks of 10 (Telegram limit)
+                chunk_size = 10
+                for i in range(0, len(media_group), chunk_size):
+                    chunk = media_group[i:i + chunk_size]
+                    await message.answer_media_group(chunk)
+            
+            # Send audio separately if available
+            if audio_files:
+                for audio_path in audio_files:
+                    try:
+                        await message.answer_audio(
+                            types.FSInputFile(audio_path)
+                        )
+                    except Exception as e:
+                        logging.error(f"Failed to send audio: {e}")
+
+            # Cleanup
+            for photo_path in file_path:
+                try:
+                    photo_path.unlink()
+                except Exception:
+                    pass
+            await status_message.delete()
+
+        elif file_path.exists():
+            await update_status("📤 Uploading to Telegram...")
+            
+            # Use unified caption format
+            caption = format_caption(metadata, platform)
+
+            if is_music:
+                if thumbnail_path:
+                    await message.answer_audio(
+                        types.FSInputFile(file_path), 
+                        thumbnail=types.FSInputFile(thumbnail_path),
+                        duration=metadata.get('duration'),
+                        caption=caption,
+                        parse_mode='HTML'
+                    )
+                else:
+                    await message.answer_audio(
+                        types.FSInputFile(file_path),
+                        duration=metadata.get('duration'),
+                        caption=caption,
+                        parse_mode='HTML'
+                    )
+            else:
+                video_kwargs = {
+                    'video': types.FSInputFile(file_path),
+                    'duration': metadata.get('duration'),
+                    'supports_streaming': True,
+                    'caption': caption,
+                    'parse_mode': 'HTML'
+                }
+                
+                # Add dimensions for better preview
+                if metadata.get('width') and metadata.get('height'):
+                    video_kwargs['width'] = metadata.get('width')
+                    video_kwargs['height'] = metadata.get('height')
+                
+                if thumbnail_path and thumbnail_path.exists():
+                    video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
+                
+                logging.info(f"[TELEGRAM] Sending video: {file_path.name} ({metadata.get('width')}x{metadata.get('height')}, {metadata.get('duration')}s, thumbnail: {bool(thumbnail_path)})")
+                await message.answer_video(**video_kwargs)
+            
+            file_path.unlink()
+            if thumbnail_path and thumbnail_path.exists():
+                thumbnail_path.unlink()
+            await status_message.delete()
+        else:
+            await status_message.edit_text("Sorry, something went wrong during download.")
+    
+    except Exception as e:
+        error_msg = str(e)
+        logging.error(f"Error: {error_msg}")
+        
+        # User-friendly error messages
+        if "No working app info" in error_msg or "tiktok:sound" in error_msg or "music" in error_msg.lower():
+            user_error = "❌ TikTok sound/music links are not supported. Please send a video link instead."
+        elif "Unsupported URL" in error_msg:
+            user_error = "❌ This URL is not supported. Please try a different link."
+        elif "Private video" in error_msg or "Login required" in error_msg:
+            user_error = "❌ This video is private or requires login."
+        elif "Sign in to confirm" in error_msg:
+            user_error = "⚠️ YouTube requires authentication (cookies). Please contact the bot admin."
+        else:
+            user_error = f"❌ An error occurred: {error_msg}"
+        
+        if 'status_message' in locals():
+            await status_message.edit_text(user_error)
+        else:
+            await message.answer(user_error)
+
+@router.callback_query(F.data.startswith("format:"))
+async def handle_format_selection(callback: types.CallbackQuery):
+    try:
+        await callback.answer()
+        _, format_type, request_id = callback.data.split(":", 2)
+        
+        url = url_cache.get(request_id)
+        if not url:
+            await callback.message.edit_text("⚠️ Request expired. Please send the link again.")
+            return
+
+        if format_type == "video":
+            builder = InlineKeyboardBuilder()
+            resolutions = [("1080p", 1080), ("720p", 720), ("480p", 480), ("360p", 360)]
+            
+            for label, height in resolutions:
+                builder.add(InlineKeyboardButton(
+                    text=label, 
+                    callback_data=f"dl_res:{request_id}:{height}"
+                ))
+            builder.adjust(2)
+            
+            await callback.message.edit_text("Select video quality:", reply_markup=builder.as_markup())
+            return
+
+        status_message = await callback.message.edit_text("⏳ Starting...")
+        
+        async def update_status(text: str):
+            try:
+                await status_message.edit_text(text)
+            except Exception:
+                pass
+        
+        try:
+            is_music = True
+            file_path, thumbnail_path, metadata = await download_media(url, is_music, progress_callback=update_status)
+
+            stats.add_active_user(callback.from_user.id)
+            stats.add_download(
+                content_type='Music',
+                user_id=callback.from_user.id,
+                username=callback.from_user.username or "No username",
+                platform='youtube',
+                url=url,
+                title=file_path.stem
+            )
+
+            user_fullname = callback.from_user.full_name
+            username = callback.from_user.username or "No username"
+            user_id = callback.from_user.id
+            download_logger.info(
+                f"User: {user_fullname} (@{username}, ID: {user_id}) | "
+                f"Platform: youtube | "
+                f"Type: Audio | "
+                f"URL: {url}"
+            )
+
+            if file_path.exists():
+                await update_status("📤 Uploading to Telegram...")
+                
+                caption = format_caption(metadata, 'youtube')
+
+                if thumbnail_path:
+                    await callback.message.answer_audio(
+                        types.FSInputFile(file_path), 
+                        thumbnail=types.FSInputFile(thumbnail_path),
+                        duration=metadata.get('duration'),
+                        caption=caption,
+                        parse_mode='HTML'
+                    )
+                else:
+                    await callback.message.answer_audio(
+                        types.FSInputFile(file_path),
+                        duration=metadata.get('duration'),
+                        caption=caption,
+                        parse_mode='HTML'
+                    )
+                
+                file_path.unlink()
+                if thumbnail_path and thumbnail_path.exists():
+                    thumbnail_path.unlink()
+                await status_message.delete()
+            else:
+                await status_message.edit_text("Sorry, something went wrong during download.")
+
+        except Exception as e:
+            error_msg = str(e)
+            logging.error(f"Error: {error_msg}")
+            
+            if "No working app info" in error_msg or "tiktok:sound" in error_msg:
+                user_error = "❌ TikTok sound/music links are not supported. Please send a video link."
+            elif "Unsupported URL" in error_msg:
+                user_error = "❌ This URL is not supported."
+            else:
+                user_error = f"❌ An error occurred: {error_msg}"
+            
+            await status_message.edit_text(user_error)
+
+    except Exception as e:
+        logging.error(f"Error in callback handling: {str(e)}")
+        try:
+            await callback.message.answer("❌ Sorry, this request has expired. Please try again.")
+        except Exception:
+            pass
+
+@router.callback_query(F.data.startswith("dl_res:"))
+async def handle_resolution_selection(callback: types.CallbackQuery):
+    try:
+        await callback.answer()
+        _, request_id, height = callback.data.split(":", 2)
+        
+        url = url_cache.get(request_id)
+        if not url:
+            await callback.message.edit_text("⚠️ Request expired. Please send the link again.")
+            return
+
+        status_message = await callback.message.edit_text(f"⏳ Downloading video ({height}p)...")
+        
+        async def update_status(text: str):
+            try:
+                await status_message.edit_text(text)
+            except Exception:
+                pass
+        
+        try:
+            file_path, thumbnail_path, metadata = await download_media(url, is_music=False, video_height=int(height), progress_callback=update_status)
+
+            stats.add_active_user(callback.from_user.id)
+            stats.add_download(
+                content_type='Video',
+                user_id=callback.from_user.id,
+                username=callback.from_user.username or "No username",
+                platform='youtube',
+                url=url,
+                title=file_path.stem
+            )
+
+            user_fullname = callback.from_user.full_name
+            username = callback.from_user.username or "No username"
+            user_id = callback.from_user.id
+            download_logger.info(
+                f"User: {user_fullname} (@{username}, ID: {user_id}) | "
+                f"Platform: youtube | "
+                f"Type: Video ({height}p) | "
+                f"URL: {url}"
+            )
+
+            if file_path.exists():
+                await update_status("📤 Uploading to Telegram...")
+                
+                caption = format_caption(metadata, 'youtube')
+
+                video_kwargs = {
+                    'video': types.FSInputFile(file_path),
+                    'duration': metadata.get('duration'),
+                    'supports_streaming': True,
+                    'caption': caption,
+                    'parse_mode': 'HTML'
+                }
+                
+                # Add dimensions for better preview
+                if metadata.get('width') and metadata.get('height'):
+                    video_kwargs['width'] = metadata.get('width')
+                    video_kwargs['height'] = metadata.get('height')
+                
+                if thumbnail_path and thumbnail_path.exists():
+                    video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
+                
+                logging.info(f"[TELEGRAM] Sending video: {file_path.name} ({metadata.get('width')}x{metadata.get('height')}, thumbnail: {bool(thumbnail_path)})")
+                await callback.message.answer_video(**video_kwargs)
+                
+                file_path.unlink()
+                if thumbnail_path and thumbnail_path.exists():
+                    thumbnail_path.unlink()
+                await status_message.delete()
+            else:
+                await status_message.edit_text("Sorry, something went wrong during download.")
+
+        except Exception as e:
+            error_msg = str(e)
+            logging.error(f"Error in video download: {error_msg}")
+            
+            if "No working app info" in error_msg or "tiktok:sound" in error_msg:
+                user_error = "❌ TikTok sound/music links are not supported. Please send a video link."
+            elif "Unsupported URL" in error_msg:
+                user_error = "❌ This URL is not supported."
+            else:
+                user_error = f"❌ An error occurred: {error_msg}"
+            
+            await status_message.edit_text(user_error)
+
+    except Exception as e:
+        logging.error(f"Error in resolution callback: {str(e)}")

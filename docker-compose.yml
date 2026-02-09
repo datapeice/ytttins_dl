@@ -1,0 +1,47 @@
+version: '3.11'
+
+services:
+  bot:
+    build: .
+    container_name: telegram-downloader-bot
+    restart: unless-stopped
+    volumes:
+      # Флаг :Z перекрашивает контекст SELinux для этого контейнера
+      - ./downloads:/app/downloads:rw,Z 
+      - ./logs:/app/logs:rw,Z 
+      - ./data:/app/data:rw,Z 
+      - ./main.py:/app/main.py:ro,Z 
+      - ./.env:/app/.env:ro,Z
+      # Cobalt теперь копируется в ./cobalt при git clone
+    environment:
+      - TZ=UTC
+      - PYTHONUNBUFFERED=1
+      - BOT_TOKEN=${BOT_TOKEN}
+      - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - DATABASE_URL=${DATABASE_URL}
+      - COBALT_API_URL=${COBALT_API_URL:-http://localhost:9000/}
+      - API_URL=${API_URL:-http://localhost:9000/}
+      - API_PORT=${API_PORT:-9000}
+      - COBALT_API_KEY=${COBALT_API_KEY}
+      - USE_COBALT=${USE_COBALT:-true}
+      #- HTTP_PROXY=${HTTP_PROXY}
+      #- HTTPS_PROXY=${HTTPS_PROXY}
+      - COOKIES_CONTENT=${COOKIES_CONTENT}
+    #env_file:
+    #  - .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: [ "CMD-SHELL", "ps aux | grep -E '(python.*main.py|node.*cobalt)' || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bot_network
+
+networks:
+  bot_network:
+    driver: bridge

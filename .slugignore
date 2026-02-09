@@ -1,0 +1,24 @@
+# Don't upload these to Heroku slug (saves space)
+downloads/*
+logs/*
+*.log
+.git
+.gitignore
+.env
+.env.*
+README.md
+docker-compose.yml
+Dockerfile
+*.md
+test*.py
+__pycache__
+.pytest_cache
+.vscode
+.idea
+
+# Cobalt unnecessary files
+cobalt/web
+cobalt/docs
+cobalt/.github
+cobalt/packages
+cobalt/api/node_modules
