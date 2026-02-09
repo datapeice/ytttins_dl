@@ -34,20 +34,27 @@ def format_caption(metadata: dict, platform: str) -> str:
 async def cmd_start(message: types.Message):
     await message.answer(
         "Hello! Send me a link to download video from:\n"
-        "- YouTube\n"
-        "- YouTube Music (will download as MP3)\n"
+        "- YouTube / YouTube Music 🎵\n"
         "- TikTok\n"
         "- Instagram\n"
+        "- Twitter/X\n"
         "- Reddit\n"
+        "- Facebook\n"
+        "- Vimeo\n"
+        "- Twitch\n"
+        "- Pinterest\n"
+        "- VK / Dailymotion\n"
+        "- And 1800+ other sites!\n\n"
         "Developed by @datapeice"
     )
 
 @router.message(lambda m: m.text and not m.text.startswith(('/start', '/panel', '/whitelist', '/unwhitelist', 'add @')))
 async def handle_url(message: types.Message):
-    url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+|youtube\.com|youtu\.be|tiktok\.com|instagram\.com|reddit\.com|redd\.it'
+    # Accept any URL-like string
+    url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
     
     if not re.search(url_pattern, message.text):
-        await message.answer("Please send a valid URL from YouTube, TikTok, Instagram, or Reddit.")
+        await message.answer("Please send a valid URL.")
         return
 
     # Whitelist check
@@ -167,21 +174,21 @@ async def handle_url(message: types.Message):
                     await message.answer_audio(
                         types.FSInputFile(file_path), 
                         thumbnail=types.FSInputFile(thumbnail_path),
-                        duration=metadata.get('duration'),
+                        duration=int(metadata.get('duration', 0)),
                         caption=caption,
                         parse_mode='HTML'
                     )
                 else:
                     await message.answer_audio(
                         types.FSInputFile(file_path),
-                        duration=metadata.get('duration'),
+                        duration=int(metadata.get('duration', 0)),
                         caption=caption,
                         parse_mode='HTML'
                     )
             else:
                 video_kwargs = {
                     'video': types.FSInputFile(file_path),
-                    'duration': metadata.get('duration'),
+                    'duration': int(metadata.get('duration', 0)),
                     'supports_streaming': True,
                     'caption': caption,
                     'parse_mode': 'HTML'
@@ -294,14 +301,14 @@ async def handle_format_selection(callback: types.CallbackQuery):
                     await callback.message.answer_audio(
                         types.FSInputFile(file_path), 
                         thumbnail=types.FSInputFile(thumbnail_path),
-                        duration=metadata.get('duration'),
+                        duration=int(metadata.get('duration', 0)),
                         caption=caption,
                         parse_mode='HTML'
                     )
                 else:
                     await callback.message.answer_audio(
                         types.FSInputFile(file_path),
-                        duration=metadata.get('duration'),
+                        duration=int(metadata.get('duration', 0)),
                         caption=caption,
                         parse_mode='HTML'
                     )
@@ -385,7 +392,7 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
 
                 video_kwargs = {
                     'video': types.FSInputFile(file_path),
-                    'duration': metadata.get('duration'),
+                    'duration': int(metadata.get('duration', 0)),
                     'supports_streaming': True,
                     'caption': caption,
                     'parse_mode': 'HTML'

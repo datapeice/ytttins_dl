@@ -89,14 +89,34 @@ get_cookies_content()
 
 # === Вспомогательные функции ===
 def get_platform(url: str) -> str:
-    if "youtube.com" in url or "youtu.be" in url:
+    """Detect platform from URL."""
+    url_lower = url.lower()
+    
+    if "youtube.com" in url_lower or "youtu.be" in url_lower:
         return "youtube"
-    elif "tiktok.com" in url:
+    elif "tiktok.com" in url_lower:
         return "tiktok"
-    elif "instagram.com" in url:
+    elif "instagram.com" in url_lower:
         return "instagram"
-    elif "reddit.com" in url or "redd.it" in url:
+    elif "reddit.com" in url_lower or "redd.it" in url_lower:
         return "reddit"
+    elif "twitter.com" in url_lower or "x.com" in url_lower or "t.co" in url_lower:
+        return "twitter"
+    elif "facebook.com" in url_lower or "fb.watch" in url_lower or "fb.com" in url_lower:
+        return "facebook"
+    elif "vimeo.com" in url_lower:
+        return "vimeo"
+    elif "twitch.tv" in url_lower:
+        return "twitch"
+    elif "pinterest.com" in url_lower or "pin.it" in url_lower:
+        return "pinterest"
+    elif "vk.com" in url_lower or "vk.ru" in url_lower:
+        return "vk"
+    elif "dailymotion.com" in url_lower or "dai.ly" in url_lower:
+        return "dailymotion"
+    elif "https://" in url_lower or "http://" in url_lower:
+        # yt-dlp supports 1800+ sites, try anyway
+        return "video"
     else:
         return "unknown"
 
@@ -123,12 +143,14 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
 
     platform = get_platform(url)
     
+    # Показываем смешной статус сразу
+    if progress_callback:
+        funny_status = random.choice(FUNNY_STATUSES)
+        await progress_callback(f"🎬 {funny_status}")
+    
     # === МЕТОД 1: YT-DLP (основной) ===
     ytdlp_error = None
     try:
-        if progress_callback:
-            await progress_callback("⏳ Starting yt-dlp...")
-        
         logging.info(f"[YT-DLP] Attempting download: {url}")
         
         # TikTok через специальный метод
@@ -145,6 +167,8 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     # === МЕТОД 1.5: YT-DLP С ПРОКСИ (fallback если есть прокси) ===
     if SOCKS_PROXY and ytdlp_error:
         try:
+            logging.info(f"[YT-DLP+PROXY] Attempting with SOCKS proxy")
+            
             # TikTok через специальный метод с прокси
             if platform == "tiktok":
                 return await _download_local_tiktok(url, use_proxy=True)
@@ -153,18 +177,12 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             return await _download_local_ytdlp(url, is_music, use_proxy=True)
             
         except Exception as proxy_error:
+            logging.warning(f"[YT-DLP+PROXY] ❌ Failed: {proxy_error}")
             pass  # Silent fallback to Cobalt
     
     # === МЕТОД 2: COBALT API (fallback) ===
     if cobalt_client:
         try:
-            # Показываем прикольный статус
-            funny_status = random.choice(FUNNY_STATUSES)
-            if progress_callback:
-                await progress_callback(f"🔵 {funny_status}")
-                await asyncio.sleep(0.5)  # Даём пользователю прочитать
-                await progress_callback("🔵 Cobalt API working...")
-            
             logging.info(f"[COBALT] Attempting download: {url}")
             file_path, thumb_path, metadata = await cobalt_client.download_media(
                 url=url,
@@ -470,6 +488,9 @@ async def _download_tiktok_tikwm(url: str) -> Tuple[Path, Optional[Path], Dict]:
     if not video_url:
         raise Exception("No video URL found in tikwm response")
     
+    # Get thumbnail URL
+    thumbnail_url = result.get('origin_cover') or result.get('cover')
+    
     # Extract metadata
     author = result.get('author', {}).get('unique_id', 'Unknown')
     title = result.get('title', 'TikTok Video')
@@ -492,6 +513,23 @@ async def _download_tiktok_tikwm(url: str) -> Tuple[Path, Optional[Path], Dict]:
     
     logging.info(f"tikwm: Video downloaded successfully to {video_path}")
     
+    # Download thumbnail if available
+    thumbnail_path = None
+    if thumbnail_url:
+        try:
+            thumbnail_path = DOWNLOADS_DIR / f"tiktok_{unique_id}.jpg"
+            thumb_response = requests.get(thumbnail_url, headers={'User-Agent': headers['User-Agent']}, timeout=10)
+            
+            if thumb_response.status_code == 200:
+                with open(thumbnail_path, 'wb') as f:
+                    f.write(thumb_response.content)
+                logging.info(f"tikwm: Thumbnail downloaded to {thumbnail_path}")
+            else:
+                thumbnail_path = None
+        except Exception as e:
+            logging.warning(f"tikwm: Failed to download thumbnail: {e}")
+            thumbnail_path = None
+    
     # Не проверяем кодек - принимаем любой формат (H264 или HEVC)
     # Если Telegram не поддержит HEVC, пользователь увидит ошибку и попробует снова
     
@@ -503,7 +541,7 @@ async def _download_tiktok_tikwm(url: str) -> Tuple[Path, Optional[Path], Dict]:
         'ext': 'mp4'
     }
     
-    return video_path, None, metadata
+    return video_path, thumbnail_path, metadata
 
 # --- ФУНКЦИИ ДЛЯ АДМИНКИ (ВЕРСИИ) ---
 
