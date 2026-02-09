@@ -95,6 +95,8 @@ def get_platform(url: str) -> str:
         return "tiktok"
     elif "instagram.com" in url:
         return "instagram"
+    elif "reddit.com" in url or "redd.it" in url:
+        return "reddit"
     else:
         return "unknown"
 
@@ -143,11 +145,6 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     # === МЕТОД 1.5: YT-DLP С ПРОКСИ (fallback если есть прокси) ===
     if SOCKS_PROXY and ytdlp_error:
         try:
-            if progress_callback:
-                await progress_callback("🔐 Retrying yt-dlp with proxy...")
-            
-            logging.info(f"[YT-DLP+PROXY] Attempting download with SOCKS proxy")
-            
             # TikTok через специальный метод с прокси
             if platform == "tiktok":
                 return await _download_local_tiktok(url, use_proxy=True)
@@ -156,7 +153,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             return await _download_local_ytdlp(url, is_music, use_proxy=True)
             
         except Exception as proxy_error:
-            logging.warning(f"[YT-DLP+PROXY] ❌ Failed: {proxy_error}")
+            pass  # Silent fallback to Cobalt
     
     # === МЕТОД 2: COBALT API (fallback) ===
     if cobalt_client:
@@ -215,7 +212,6 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: boo
     # Добавляем прокси, если запрошено и настроено
     if use_proxy and SOCKS_PROXY:
         ydl_opts['proxy'] = SOCKS_PROXY
-        logging.info(f"🔐 Using SOCKS proxy for yt-dlp")
     
     if is_music:
         # Только аудио
@@ -280,7 +276,6 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False) -> Tuple[Uni
     # Добавляем прокси, если запрошено и настроено
     if use_proxy and SOCKS_PROXY:
         ydl_opts_base['proxy'] = SOCKS_PROXY
-        logging.info(f"🔐 Using SOCKS proxy for TikTok download")
     
     if is_slideshow:
         # Try custom scraper first for photos (as yt-dlp might fail or be slow)

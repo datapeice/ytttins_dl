@@ -38,15 +38,16 @@ async def cmd_start(message: types.Message):
         "- YouTube Music (will download as MP3)\n"
         "- TikTok\n"
         "- Instagram\n"
+        "- Reddit\n"
         "Developed by @datapeice"
     )
 
 @router.message(lambda m: m.text and not m.text.startswith(('/start', '/panel', '/whitelist', '/unwhitelist', 'add @')))
 async def handle_url(message: types.Message):
-    url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+|youtube\.com|youtu\.be|tiktok\.com|instagram\.com'
+    url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+|youtube\.com|youtu\.be|tiktok\.com|instagram\.com|reddit\.com|redd\.it'
     
     if not re.search(url_pattern, message.text):
-        await message.answer("Please send a valid URL from YouTube, TikTok, or Instagram.")
+        await message.answer("Please send a valid URL from YouTube, TikTok, Instagram, or Reddit.")
         return
 
     # Whitelist check
