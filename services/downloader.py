@@ -29,6 +29,16 @@ USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0',
 ]
 
+# TLS fingerprints для curl-cffi (имитация браузеров)
+IMPERSONATE_TARGETS = [
+    'chrome120',
+    'chrome110',
+    'safari15_5',
+    'chrome99',
+    'safari15_3',
+    'edge101',
+]
+
 # Import CobaltClient only if USE_COBALT is enabled
 if USE_COBALT and COBALT_API_URL:
     try:
@@ -262,12 +272,16 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: boo
     last_error = None
     for attempt, user_agent in enumerate(USER_AGENTS, 1):
         try:
+            impersonate_target = IMPERSONATE_TARGETS[(attempt - 1) % len(IMPERSONATE_TARGETS)]
+            
             ydl_opts = {
                 'outtmpl': output_template,
                 'cookiefile': cookie_file if cookie_file.exists() else None,
                 'noplaylist': True,
                 'quiet': False,
                 'verbose': True,
+                # Имитация TLS-отпечатка браузера через curl-cffi
+                'impersonate': impersonate_target,
             }
             
             # Reddit-specific configuration to avoid blocks
@@ -320,7 +334,7 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: boo
                 logging.info(f"Downloaded: {file_path.name}")
                 
                 if attempt > 1:
-                    logging.info(f"✅ Success with user-agent {attempt}/{len(USER_AGENTS)}")
+                    logging.info(f"✅ Success with user-agent {attempt}/{len(USER_AGENTS)} + impersonate={impersonate_target}")
                 
                 return file_path, None, metadata
                 
@@ -328,10 +342,10 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: boo
             error_str = str(e)
             # Check if it's a 403 error
             if "403" in error_str or "Blocked" in error_str or "Forbidden" in error_str:
-                logging.warning(f"Attempt {attempt}/{len(USER_AGENTS)} failed with 403: {error_str[:100]}")
+                logging.warning(f"Attempt {attempt}/{len(USER_AGENTS)} failed with 403 (impersonate={impersonate_target}): {error_str[:100]}")
                 last_error = e
                 if attempt < len(USER_AGENTS):
-                    logging.info(f"Retrying with different user-agent...")
+                    logging.info(f"Retrying with different user-agent + TLS fingerprint...")
                     continue
             # If not 403 or last attempt, raise immediately
             raise e
@@ -356,6 +370,8 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False) -> Tuple[Uni
         'noplaylist': True,
         'quiet': False, # Enable logging to see what's wrong
         'verbose': True,
+        # Имитация TLS-отпечатка браузера через curl-cffi
+        'impersonate': 'chrome120',
         # Remove hardcoded User-Agent to avoid conflicts with cookies or triggering anti-bot
         # 'http_headers': { ... } 
     }
