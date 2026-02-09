@@ -19,6 +19,8 @@ from database.storage import stats
 from database.models import Cookie
 from services.tiktok_scraper import download_tiktok_images
 
+IS_HEROKU = bool(os.getenv("DYNO"))
+
 # User-agents для обхода блокировок
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
@@ -39,6 +41,27 @@ IMPERSONATE_TARGETS = [
     'safari15_5',
     'safari15_3',
 ]
+
+try:
+    from yt_dlp.networking.impersonate import ImpersonateTarget
+except Exception:
+    ImpersonateTarget = None
+
+
+def build_impersonate_target(value: str):
+    if not ImpersonateTarget:
+        return value
+    for method_name in ("from_str", "parse", "from_string"):
+        method = getattr(ImpersonateTarget, method_name, None)
+        if method:
+            try:
+                return method(value)
+            except Exception:
+                continue
+    try:
+        return ImpersonateTarget(value)
+    except Exception:
+        return value
 
 # Import CobaltClient only if USE_COBALT is enabled
 if USE_COBALT and COBALT_API_URL:
@@ -206,6 +229,25 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     if progress_callback:
         funny_status = random.choice(FUNNY_STATUSES)
         await progress_callback(f"🎬 {funny_status}")
+
+    # Prefer Cobalt on Heroku for Reddit (yt-dlp impersonate fails on Heroku)
+    if platform == "reddit" and IS_HEROKU and cobalt_client:
+        try:
+            if progress_callback:
+                await progress_callback("🛡️ Reddit: using Cobalt (Heroku mode)")
+            logging.info(f"[COBALT] Heroku-first attempt for Reddit: {url}")
+            file_path, thumb_path, metadata = await cobalt_client.download_media(
+                url=url,
+                quality="1080",
+                is_audio=is_music,
+                progress_callback=progress_callback
+            )
+            if file_path and file_path.exists():
+                logging.info(f"[COBALT] ✅ Success: {file_path.name}")
+                return file_path, thumb_path, metadata
+            logging.warning("[COBALT] ⚠️ No file returned")
+        except Exception as cobalt_error:
+            logging.error(f"[COBALT] ❌ Error (Heroku-first): {cobalt_error}")
     
     # === МЕТОД 1: YT-DLP (основной) ===
     ytdlp_error = None
@@ -277,12 +319,18 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: boo
     unique_id = uuid.uuid4().hex[:8]
     output_template = str(DOWNLOADS_DIR / f"%(title)s_%(id)s_{unique_id}.%(ext)s")
     cookie_file = DATA_DIR / "cookies.txt"
+
+    is_reddit = "reddit.com" in url or "redd.it" in url
     
     # Try multiple user-agents if we get 403
     last_error = None
     for attempt, user_agent in enumerate(USER_AGENTS, 1):
         # First try with impersonate, fallback to without if it fails
-        for use_impersonate in [True, False]:
+        impersonate_modes = [True, False]
+        if is_reddit and IS_HEROKU:
+            # Avoid yt-dlp impersonate on Heroku (AssertionError from ImpersonateTarget)
+            impersonate_modes = [False]
+        for use_impersonate in impersonate_modes:
             try:
                 impersonate_target = IMPERSONATE_TARGETS[(attempt - 1) % len(IMPERSONATE_TARGETS)]
                 
@@ -298,8 +346,15 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: boo
                 # Имитация TLS-отпечатка браузера через curl-cffi (если поддерживается)
                 if use_impersonate:
                     try:
-                        ydl_opts['impersonate'] = impersonate_target
-                        logging.info(f"🔒 Attempting TLS impersonation: {impersonate_target}")
+                        target_obj = build_impersonate_target(impersonate_target)
+                        if ImpersonateTarget and not isinstance(target_obj, ImpersonateTarget):
+                            logging.warning(
+                                f"⚠️ Impersonate target not supported on this runtime: {impersonate_target}"
+                            )
+                            use_impersonate = False
+                        else:
+                            ydl_opts['impersonate'] = target_obj
+                            logging.info(f"🔒 Attempting TLS impersonation: {impersonate_target}")
                     except Exception as imp_err:
                         logging.error(f"❌ Failed to set impersonate={impersonate_target}: {imp_err}")
                         # Don't retry with impersonate if setting fails
