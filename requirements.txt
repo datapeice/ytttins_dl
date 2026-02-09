@@ -1,7 +1,7 @@
 aiogram>=3.0.0
 python-dotenv>=0.19.0
-# pin to repo or commit for latest extractors
-yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@master
+# pin to a stable release for Heroku compatibility
+yt-dlp
 aiohttp>=3.8.0
 sqlalchemy
 psycopg2-binary
@@ -13,6 +13,6 @@ jmespath
 Pillow>=10.0.0
 
 # EJS / impersonation helpers
-curl-cffi>=0.7.0
+curl-cffi==0.5.10
 brotli>=1.1.0
 pycryptodomex>=3.20.0
