@@ -136,11 +136,20 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                     url = str(resp.url)
         except Exception as e:
             logging.warning(f"Failed to resolve TikTok URL: {e}")
+    
+    # Resolve Reddit short URLs (reddit.com/r/.../s/...) to full URLs
+    if "reddit.com" in url and "/s/" in url:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.head(url, allow_redirects=True, timeout=5) as resp:
+                    url = str(resp.url)
+                    logging.info(f"Resolved Reddit URL to: {url}")
+        except Exception as e:
+            logging.warning(f"Failed to resolve Reddit URL: {e}")
 
     # Strip query parameters (they often confuse extractors or contain tracking)
     if '?' in url:
         url = url.split('?')[0]
-
     platform = get_platform(url)
     
     # Показываем смешной статус сразу
@@ -226,6 +235,14 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: boo
         'quiet': False,
         'verbose': True,
     }
+    
+    # Reddit-specific configuration to avoid blocks
+    if "reddit.com" in url or "redd.it" in url:
+        ydl_opts['extractor_args'] = {
+            'reddit': {
+                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
+            }
+        }
     
     # Добавляем прокси, если запрошено и настроено
     if use_proxy and SOCKS_PROXY:

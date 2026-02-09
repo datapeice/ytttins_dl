@@ -198,8 +198,8 @@ async def handle_url(message: types.Message):
                 #     video_kwargs['width'] = metadata.get('width')
                 #     video_kwargs['height'] = metadata.get('height')
                 
-                # if thumbnail_path:
-                #    video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
+                if thumbnail_path:
+                   video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
                 
                 logging.info(f"Sending video with kwargs: {video_kwargs}")
                 await message.answer_video(**video_kwargs)
@@ -402,8 +402,8 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
                 #     video_kwargs['width'] = metadata.get('width')
                 #     video_kwargs['height'] = metadata.get('height')
                 
-                # if thumbnail_path:
-                #    video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
+                if thumbnail_path:
+                   video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
                 
                 logging.info(f"Sending video with kwargs: {video_kwargs}")
                 await callback.message.answer_video(**video_kwargs)
