@@ -138,11 +138,20 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             logging.warning(f"Failed to resolve TikTok URL: {e}")
     
     # Resolve Reddit short URLs (reddit.com/r/.../s/...) to full URLs
+    # Use GET with user agent to avoid 403, and follow all redirects
     if "reddit.com" in url and "/s/" in url:
         try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
+            }
             async with aiohttp.ClientSession() as session:
-                async with session.head(url, allow_redirects=True, timeout=5) as resp:
-                    url = str(resp.url)
+                async with session.get(url, headers=headers, allow_redirects=True, timeout=10) as resp:
+                    final_url = str(resp.url)
+                    # Keep resolving if still a short URL
+                    if "/s/" in final_url and final_url != url:
+                        async with session.get(final_url, headers=headers, allow_redirects=True, timeout=10) as resp2:
+                            final_url = str(resp2.url)
+                    url = final_url
                     logging.info(f"Resolved Reddit URL to: {url}")
         except Exception as e:
             logging.warning(f"Failed to resolve Reddit URL: {e}")
