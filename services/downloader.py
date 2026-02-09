@@ -6,6 +6,7 @@ import yt_dlp
 import asyncio
 import random
 import aiohttp
+import requests
 import concurrent.futures
 from pathlib import Path
 from typing import Tuple, Dict, Optional, Callable, Union, List
@@ -176,6 +177,32 @@ def get_platform(url: str) -> str:
 def is_youtube_music(url: str) -> bool:
     return "music.youtube.com" in url
 
+def unshorten_reddit_url(url: str, proxy_url: Optional[str]) -> str:
+    if "/comments/" in url:
+        return url
+    if "reddit.com" not in url or "/s/" not in url:
+        return url
+
+    proxies = None
+    if proxy_url:
+        proxy_value = proxy_url.replace("socks5h", "socks5")
+        proxies = {"http": proxy_value, "https": proxy_value}
+
+    headers = {"User-Agent": USER_AGENTS[0]}
+
+    try:
+        response = requests.head(url, proxies=proxies, headers=headers, allow_redirects=True, timeout=10)
+        final_url = response.url
+        if final_url and "/s/" in final_url:
+            response = requests.get(url, proxies=proxies, headers=headers, allow_redirects=True, timeout=10)
+            final_url = response.url
+        if final_url and "?" in final_url:
+            final_url = final_url.split("?")[0]
+        return final_url or url
+    except Exception as e:
+        logging.warning(f"Failed to unshorten Reddit URL: {e}")
+        return url
+
 # === Основная логика ===
 
 async def download_media(url: str, is_music: bool = False, video_height: int = None, progress_callback: Optional[Callable] = None) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
@@ -190,35 +217,15 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         except Exception as e:
             logging.warning(f"Failed to resolve TikTok URL: {e}")
     
-    # Resolve Reddit short URLs (reddit.com/r/.../s/...) to full URLs
-    # Use GET with rotating user agents to avoid 403, and follow all redirects
+    # Resolve Reddit short URLs (reddit.com/r/.../s/...) to full URLs using proxy
     if "reddit.com" in url and "/s/" in url:
-        resolved = False
-        for attempt, user_agent in enumerate(USER_AGENTS, 1):
-            try:
-                headers = {'User-Agent': user_agent}
-                async with aiohttp.ClientSession() as session:
-                    # Try multiple redirect hops
-                    current_url = url
-                    for hop in range(5):  # Max 5 redirect hops
-                        async with session.get(current_url, headers=headers, allow_redirects=True, timeout=10) as resp:
-                            final_url = str(resp.url)
-                            if "/s/" not in final_url or final_url == current_url:
-                                # Successfully resolved to non-short URL
-                                url = final_url
-                                logging.info(f"✅ Resolved Reddit URL to: {url} (attempt {attempt}, hop {hop+1})")
-                                resolved = True
-                                break
-                            current_url = final_url
-                    if resolved:
-                        break
-            except Exception as e:
-                logging.warning(f"Attempt {attempt} to resolve Reddit URL failed: {e}")
-                if attempt == len(USER_AGENTS):
-                    logging.error(f"Failed to resolve Reddit URL after {len(USER_AGENTS)} attempts")
-        
-        if not resolved:
-            logging.warning(f"Could not fully resolve Reddit short URL, using: {url}")
+        try:
+            resolved_url = await asyncio.to_thread(unshorten_reddit_url, url, SOCKS_PROXY)
+            if resolved_url != url:
+                logging.info(f"✅ Resolved Reddit URL to: {resolved_url}")
+            url = resolved_url
+        except Exception as e:
+            logging.warning(f"Failed to resolve Reddit short URL via proxy: {e}")
 
     # Strip query parameters (they often confuse extractors or contain tracking)
     if '?' in url:
