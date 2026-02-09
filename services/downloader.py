@@ -14,10 +14,26 @@ from typing import Tuple, Dict, Optional, Callable, Union, List
 import protos.downloader_pb2 as pb2
 import protos.downloader_pb2_grpc as pb2_grpc
 
-from config import DOWNLOADS_DIR, DATA_DIR, COOKIES_CONTENT, HOME_SERVER_ADDRESS
+from config import DOWNLOADS_DIR, DATA_DIR, COOKIES_CONTENT, HOME_SERVER_ADDRESS, USE_COBALT, COBALT_API_URL, SOCKS_PROXY
 from database.storage import stats
 from database.models import Cookie
 from services.tiktok_scraper import download_tiktok_images
+
+# Import CobaltClient only if USE_COBALT is enabled
+if USE_COBALT and COBALT_API_URL:
+    try:
+        from services.cobalt_client import CobaltClient
+        cobalt_client = CobaltClient()
+        logging.info(f"✅ Cobalt client initialized: {COBALT_API_URL}")
+    except Exception as e:
+        logging.error(f"❌ Failed to initialize Cobalt client: {e}")
+        cobalt_client = None
+else:
+    cobalt_client = None
+    if not USE_COBALT:
+        logging.info("ℹ️ Cobalt disabled (USE_COBALT=false)")
+    elif not COBALT_API_URL:
+        logging.warning("⚠️ COBALT_API_URL not set")
 
 # === Funny statuses (English) ===
 FUNNY_STATUSES = [
@@ -105,38 +121,143 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
 
     platform = get_platform(url)
     
-    # 1. Музыка -> Домашний сервер
-    if is_music:
-        return await _download_remote_grpc(url, is_music, video_height, progress_callback)
-
-    # 2. TikTok -> Приоритет: yt-dlp локально → tikwm (без конвертации) → домашний сервер (крайний случай)
-    if platform == "tiktok":
-        # Сначала пробуем yt-dlp локально
-        try:
-            if progress_callback: await progress_callback("⏳ Starting...") 
+    # === МЕТОД 1: YT-DLP (основной) ===
+    ytdlp_error = None
+    try:
+        if progress_callback:
+            await progress_callback("⏳ Starting yt-dlp...")
+        
+        logging.info(f"[YT-DLP] Attempting download: {url}")
+        
+        # TikTok через специальный метод
+        if platform == "tiktok":
             return await _download_local_tiktok(url)
-        except Exception as e:
-            error_msg = str(e)
-            logging.warning(f"Local yt-dlp failed: {error_msg}")
+        
+        # YouTube/Instagram/музыка через универсальный метод
+        return await _download_local_ytdlp(url, is_music)
+        
+    except Exception as e:
+        ytdlp_error = str(e)
+        logging.warning(f"[YT-DLP] ❌ Failed: {ytdlp_error}")
+    
+    # === МЕТОД 1.5: YT-DLP С ПРОКСИ (fallback если есть прокси) ===
+    if SOCKS_PROXY and ytdlp_error:
+        try:
+            if progress_callback:
+                await progress_callback("🔐 Retrying yt-dlp with proxy...")
             
-            # Если yt-dlp не смог скачать - пробуем tikwm (быстро и надёжно)
-            logging.info("Trying tikwm API (without conversion)...")
-            try:
-                if progress_callback: await progress_callback("📥 Downloading...")
-                return await _download_tiktok_tikwm(url)
-            except Exception as tikwm_error:
-                logging.warning(f"tikwm also failed: {tikwm_error}")
-                
-                # Только в крайнем случае идём на домашний сервер (с конвертацией)
-                logging.info("Last resort: using Home Server with conversion...")
-                if progress_callback: await progress_callback("🏠 Using Home Server...")
-                return await _download_remote_grpc(url, is_music, video_height, progress_callback)
+            logging.info(f"[YT-DLP+PROXY] Attempting download with SOCKS proxy")
+            
+            # TikTok через специальный метод с прокси
+            if platform == "tiktok":
+                return await _download_local_tiktok(url, use_proxy=True)
+            
+            # YouTube/Instagram/музыка с прокси
+            return await _download_local_ytdlp(url, is_music, use_proxy=True)
+            
+        except Exception as proxy_error:
+            logging.warning(f"[YT-DLP+PROXY] ❌ Failed: {proxy_error}")
+    
+    # === МЕТОД 2: COBALT API (fallback) ===
+    if cobalt_client:
+        try:
+            # Показываем прикольный статус
+            funny_status = random.choice(FUNNY_STATUSES)
+            if progress_callback:
+                await progress_callback(f"🔵 {funny_status}")
+                await asyncio.sleep(0.5)  # Даём пользователю прочитать
+                await progress_callback("🔵 Cobalt API working...")
+            
+            logging.info(f"[COBALT] Attempting download: {url}")
+            file_path, thumb_path, metadata = await cobalt_client.download_media(
+                url=url,
+                quality="1080",
+                is_audio=is_music,
+                progress_callback=progress_callback
+            )
+            if file_path and file_path.exists():
+                logging.info(f"[COBALT] ✅ Success: {file_path.name}")
+                return file_path, thumb_path, metadata
+            else:
+                logging.warning("[COBALT] ⚠️ No file returned")
+        except Exception as cobalt_error:
+            logging.error(f"[COBALT] ❌ Error: {cobalt_error}")
+    
+    # === МЕТОД 3: TIKWM (только для TikTok) ===
+    if platform == "tiktok":
+        try:
+            if progress_callback:
+                await progress_callback("📥 Trying TikWM API...")
+            
+            logging.info("[TIKWM] Attempting download...")
+            return await _download_tiktok_tikwm(url)
+        except Exception as tikwm_error:
+            logging.error(f"[TIKWM] ❌ Failed: {tikwm_error}")
+    
+    # Все методы провалились
+    raise Exception(f"All download methods failed. YT-DLP error: {ytdlp_error}")
 
-    # 3. YouTube/Instagram/Fallback -> Домашний сервер
-    return await _download_remote_grpc(url, is_music, video_height, progress_callback)
+
+async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: bool = False) -> Tuple[Path, Optional[Path], Dict]:
+    """Универсальный метод для YouTube/Instagram/музыки через yt-dlp"""
+    unique_id = uuid.uuid4().hex[:8]
+    output_template = str(DOWNLOADS_DIR / f"%(title)s_%(id)s_{unique_id}.%(ext)s")
+    cookie_file = DATA_DIR / "cookies.txt"
+    
+    ydl_opts = {
+        'outtmpl': output_template,
+        'cookiefile': cookie_file if cookie_file.exists() else None,
+        'noplaylist': True,
+        'quiet': False,
+        'verbose': True,
+    }
+    
+    # Добавляем прокси, если запрошено и настроено
+    if use_proxy and SOCKS_PROXY:
+        ydl_opts['proxy'] = SOCKS_PROXY
+        logging.info(f"🔐 Using SOCKS proxy for yt-dlp")
+    
+    if is_music:
+        # Только аудио
+        ydl_opts['format'] = 'bestaudio/best'
+        ydl_opts['postprocessors'] = [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '320',
+        }]
+    else:
+        # Видео с H.264 кодеком
+        ydl_opts['format'] = 'best[vcodec^=h264]/best[vcodec^=avc]/best'
+    
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        
+        metadata = {
+            'title': info.get('title', 'Media'),
+            'uploader': info.get('uploader', 'Unknown'),
+            'webpage_url': info.get('webpage_url', url),
+            'duration': info.get('duration', 0),
+            'width': info.get('width', 0),
+            'height': info.get('height', 0),
+        }
+        
+        # Находим скачанный файл
+        downloaded_files = list(DOWNLOADS_DIR.glob(f"*{unique_id}*"))
+        
+        if not downloaded_files:
+            path = Path(ydl.prepare_filename(info))
+            if path.exists():
+                downloaded_files = [path]
+            else:
+                raise ValueError("Download failed: file not found")
+        
+        file_path = downloaded_files[0]
+        logging.info(f"Downloaded: {file_path.name}")
+        
+        return file_path, None, metadata
 
 
-async def _download_local_tiktok(url: str) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
+async def _download_local_tiktok(url: str, use_proxy: bool = False) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
     """Скачивание TikTok на VPS. Поддерживает видео (h264) и фото-слайдшоу."""
     
     unique_id = uuid.uuid4().hex[:8]
@@ -155,6 +276,11 @@ async def _download_local_tiktok(url: str) -> Tuple[Union[Path, List[Path]], Opt
         # Remove hardcoded User-Agent to avoid conflicts with cookies or triggering anti-bot
         # 'http_headers': { ... } 
     }
+    
+    # Добавляем прокси, если запрошено и настроено
+    if use_proxy and SOCKS_PROXY:
+        ydl_opts_base['proxy'] = SOCKS_PROXY
+        logging.info(f"🔐 Using SOCKS proxy for TikTok download")
     
     if is_slideshow:
         # Try custom scraper first for photos (as yt-dlp might fail or be slow)

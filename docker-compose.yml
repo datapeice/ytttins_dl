@@ -1,27 +1,32 @@
-version: '3.11'
+version: '3.8' # Рекомендуется использовать 3.8 как наиболее стабильную для compose
 
 services:
   bot:
     build: .
     container_name: telegram-downloader-bot
     restart: unless-stopped
+    # SELinux: Флаги :z и :Z автоматически меняют контекст безопасности файлов (chcon)
     volumes:
-      - ./downloads:/app/downloads:rw # Read-write for downloaded files
-      - ./logs:/app/logs:rw # Read-write for log files
-      - ./data:/app/data:rw # Read-write for persistent data
-      - ./main.py:/app/main.py:ro # Read-only for source code
+      - ./downloads:/app/downloads:rw,Z # Эксклюзивный доступ для записи
+      - ./logs:/app/logs:rw,Z           # Эксклюзивный доступ для записи
+      - ./data:/app/data:rw,Z           # Эксклюзивный доступ для записи
+      - ./main.py:/app/main.py:ro,z     # Общий доступ только для чтения
+      - ./.env:/app/.env:ro,z
     environment:
-      - TZ=UTC # Set your timezone here
+      - TZ=Europe/Moscow # Удобнее поставить твой часовой пояс
       - PYTHONUNBUFFERED=1
     env_file:
-      - .env
+      - "${PWD}/.env"
+    # На RHEL/CentOS иногда полезно явно указать, что контейнер должен иметь доступ к сети
+    security_opt:
+      - label=type:container_runtime_t 
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
     healthcheck:
-      test: [ "CMD-SHELL", "ps aux | grep python | grep main.py || exit 1" ]
+      test: [ "CMD-SHELL", "pgrep -f main.py || exit 1" ]
       interval: 30s
       timeout: 10s
       retries: 3

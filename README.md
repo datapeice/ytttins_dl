@@ -4,11 +4,18 @@ A Telegram bot that downloads media from YouTube, YouTube Music, TikTok, and Ins
 
 ## Features
 
-- 📥 **Multi-platform downloads**:
+- 📥 **Multi-platform downloads** with triple fallback system:
+  - **yt-dlp** (primary method)
+  - **Cobalt API** (fallback with funny status messages)
+  - **TikWM** (TikTok-only fallback)
+- 🌐 **Supported platforms**:
   - YouTube videos with format selection (Video/Audio)
   - YouTube Music (automatic MP3 extraction)
-  - TikTok videos
+  - TikTok videos and photo slideshows
   - Instagram videos
+- 🔐 **SOCKS5 proxy support** for geo-restricted content
+- 🎭 **Funny status messages** during Cobalt download
+- 📊 **Streaming progress updates** (20% intervals)
 - 🎵 High-quality audio extraction (320kbps MP3)
 - � User whitelist management system
 - 📊 **Advanced statistics tracking**:
@@ -71,14 +78,28 @@ Since Heroku has an ephemeral filesystem (files are deleted on restart), you hav
 
 ### 1. Configuration
 
-Create a `.env` file in the root directory:
+Copy `.env.example` to `.env` and configure:
 
 ```env
+# Required
 BOT_TOKEN=your_telegram_bot_token_here
 ADMIN_USERNAME=your_telegram_username
+
+# Cobalt API (optional but recommended)
+COBALT_API_URL=http://your-cobalt-server:9000/
+USE_COBALT=true
+COBALT_API_KEY=your_api_key
+
+# SOCKS5 Proxy (optional, for geo-restricted content)
+HTTP_PROXY=socks5://user:password@proxy-host:1080
+SOCKS_PROXY=socks5://user:password@proxy-host:1080
 ```
 
 > **Note**: Get your bot token from [@BotFather](https://t.me/botfather) on Telegram
+> 
+> **Cobalt API**: External [Cobalt](https://github.com/imputnet/cobalt) instance for fallback downloads
+> 
+> **Proxy**: Encode special characters in password (& = %26, ^ = %5E, @ = %40)
 
 ### 2. Local Development
 
@@ -163,6 +184,39 @@ The interactive admin panel (`/panel`) provides:
 3. **🔄 System Maintenance**
    - Live yt-dlp updates with progress tracking
    - Real-time status updates in Telegram
+
+## Download Fallback System
+
+The bot uses a **triple fallback chain** for 100% download reliability:
+
+### 1️⃣ yt-dlp (Primary)
+- Direct download without proxy
+- Fast and reliable for most videos
+
+### 2️⃣ yt-dlp + SOCKS5 Proxy (Fallback #1)
+- Automatically activates if direct download fails
+- Bypasses geo-restrictions
+- Shows status: `🔐 Retrying yt-dlp with proxy...`
+
+### 3️⃣ Cobalt API (Fallback #2)
+- External Cobalt instance
+- Shows **funny status messages**:
+  - "💻 Hacking the Pentagon..."
+  - "🍕 Ordering pizza for the server's rats..."
+  - "🇵🇱 Searching for Polish alt girls..."
+  - etc. (21 total messages)
+- Streaming progress: `⬇️ Downloading 40%...`
+
+### 4️⃣ TikWM (Fallback #3, TikTok only)
+- Last resort for TikTok videos
+- Ensures 100% success rate
+
+**Example flow:**
+```
+User sends URL → yt-dlp tries → Fails (geo-blocked)
+              → yt-dlp+proxy tries → Fails (API down)
+              → Cobalt API tries → Success! ✅
+```
 
 ## Usage Examples
 
