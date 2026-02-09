@@ -271,84 +271,98 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: boo
     # Try multiple user-agents if we get 403
     last_error = None
     for attempt, user_agent in enumerate(USER_AGENTS, 1):
-        try:
-            impersonate_target = IMPERSONATE_TARGETS[(attempt - 1) % len(IMPERSONATE_TARGETS)]
-            
-            ydl_opts = {
-                'outtmpl': output_template,
-                'cookiefile': cookie_file if cookie_file.exists() else None,
-                'noplaylist': True,
-                'quiet': False,
-                'verbose': True,
-                # Имитация TLS-отпечатка браузера через curl-cffi
-                'impersonate': impersonate_target,
-            }
-            
-            # Reddit-specific configuration to avoid blocks
-            if "reddit.com" in url or "redd.it" in url:
-                ydl_opts['extractor_args'] = {
-                    'reddit': {
-                        'user_agent': user_agent
+        # First try with impersonate, fallback to without if it fails
+        for use_impersonate in [True, False]:
+            try:
+                impersonate_target = IMPERSONATE_TARGETS[(attempt - 1) % len(IMPERSONATE_TARGETS)]
+                
+                ydl_opts = {
+                    'outtmpl': output_template,
+                    'cookiefile': cookie_file if cookie_file.exists() else None,
+                    'noplaylist': True,
+                    'quiet': False,
+                    'verbose': True,
+                }
+                
+                # Имитация TLS-отпечатка браузера через curl-cffi (если поддерживается)
+                if use_impersonate:
+                    ydl_opts['impersonate'] = impersonate_target
+                
+                # Reddit-specific configuration to avoid blocks
+                if "reddit.com" in url or "redd.it" in url:
+                    ydl_opts['extractor_args'] = {
+                        'reddit': {
+                            'user_agent': user_agent
+                        }
                     }
-                }
-            
-            # Добавляем прокси, если запрошено и настроено
-            if use_proxy and SOCKS_PROXY:
-                ydl_opts['proxy'] = SOCKS_PROXY
-            
-            if is_music:
-                # Только аудио
-                ydl_opts['format'] = 'bestaudio/best'
-                ydl_opts['postprocessors'] = [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '320',
-                }]
-            else:
-                # Видео с H.264 кодеком
-                ydl_opts['format'] = 'best[vcodec^=h264]/best[vcodec^=avc]/best'
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
                 
-                metadata = {
-                    'title': info.get('title', 'Media'),
-                    'uploader': info.get('uploader', 'Unknown'),
-                    'webpage_url': info.get('webpage_url', url),
-                    'duration': info.get('duration', 0),
-                    'width': info.get('width', 0),
-                    'height': info.get('height', 0),
-                }
+                # Добавляем прокси, если запрошено и настроено
+                if use_proxy and SOCKS_PROXY:
+                    ydl_opts['proxy'] = SOCKS_PROXY
                 
-                # Находим скачанный файл
-                downloaded_files = list(DOWNLOADS_DIR.glob(f"*{unique_id}*"))
+                if is_music:
+                    # Только аудио
+                    ydl_opts['format'] = 'bestaudio/best'
+                    ydl_opts['postprocessors'] = [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '320',
+                    }]
+                else:
+                    # Видео с H.264 кодеком
+                    ydl_opts['format'] = 'best[vcodec^=h264]/best[vcodec^=avc]/best'
                 
-                if not downloaded_files:
-                    path = Path(ydl.prepare_filename(info))
-                    if path.exists():
-                        downloaded_files = [path]
-                    else:
-                        raise ValueError("Download failed: file not found")
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    
+                    metadata = {
+                        'title': info.get('title', 'Media'),
+                        'uploader': info.get('uploader', 'Unknown'),
+                        'webpage_url': info.get('webpage_url', url),
+                        'duration': info.get('duration', 0),
+                        'width': info.get('width', 0),
+                        'height': info.get('height', 0),
+                    }
+                    
+                    # Находим скачанный файл
+                    downloaded_files = list(DOWNLOADS_DIR.glob(f"*{unique_id}*"))
+                    
+                    if not downloaded_files:
+                        path = Path(ydl.prepare_filename(info))
+                        if path.exists():
+                            downloaded_files = [path]
+                        else:
+                            raise ValueError("Download failed: file not found")
+                    
+                    file_path = downloaded_files[0]
+                    logging.info(f"Downloaded: {file_path.name}")
+                    
+                    if use_impersonate and attempt > 1:
+                        logging.info(f"✅ Success with user-agent {attempt}/{len(USER_AGENTS)} + impersonate={impersonate_target}")
+                    elif not use_impersonate:
+                        logging.info(f"✅ Success without impersonate (attempt {attempt}/{len(USER_AGENTS)})")
+                    
+                    return file_path, None, metadata
+                    
+            except Exception as e:
+                error_str = str(e)
                 
-                file_path = downloaded_files[0]
-                logging.info(f"Downloaded: {file_path.name}")
-                
-                if attempt > 1:
-                    logging.info(f"✅ Success with user-agent {attempt}/{len(USER_AGENTS)} + impersonate={impersonate_target}")
-                
-                return file_path, None, metadata
-                
-        except Exception as e:
-            error_str = str(e)
-            # Check if it's a 403 error
-            if "403" in error_str or "Blocked" in error_str or "Forbidden" in error_str:
-                logging.warning(f"Attempt {attempt}/{len(USER_AGENTS)} failed with 403 (impersonate={impersonate_target}): {error_str[:100]}")
-                last_error = e
-                if attempt < len(USER_AGENTS):
-                    logging.info(f"Retrying with different user-agent + TLS fingerprint...")
+                # If impersonate failed, try without it
+                if use_impersonate and (not error_str or "impersonate" in error_str.lower()):
+                    logging.warning(f"Impersonate failed (attempt {attempt}), retrying without it...")
                     continue
-            # If not 403 or last attempt, raise immediately
-            raise e
+                
+                # Check if it's a 403 error
+                if "403" in error_str or "Blocked" in error_str or "Forbidden" in error_str:
+                    logging.warning(f"Attempt {attempt}/{len(USER_AGENTS)} failed with 403: {error_str[:150]}")
+                    last_error = e
+                    if attempt < len(USER_AGENTS):
+                        logging.info(f"Retrying with different user-agent...")
+                        break  # Break inner loop, continue outer loop
+                    
+                # If not 403, raise immediately
+                logging.error(f"YT-DLP error: {error_str[:200]}")
+                raise e
     
     # All attempts failed with 403
     raise last_error if last_error else Exception("All user-agent attempts failed")
@@ -370,8 +384,7 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False) -> Tuple[Uni
         'noplaylist': True,
         'quiet': False, # Enable logging to see what's wrong
         'verbose': True,
-        # Имитация TLS-отпечатка браузера через curl-cffi
-        'impersonate': 'chrome120',
+        # Note: impersonate disabled for TikTok as it causes crashes
         # Remove hardcoded User-Agent to avoid conflicts with cookies or triggering anti-bot
         # 'http_headers': { ... } 
     }
