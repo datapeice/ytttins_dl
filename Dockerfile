@@ -8,6 +8,8 @@ RUN apt-get update && \
     ffmpeg \
     python3-pip \
     git \
+    libcurl4 \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Create directories for persistent storage

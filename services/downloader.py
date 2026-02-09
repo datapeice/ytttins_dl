@@ -30,13 +30,14 @@ USER_AGENTS = [
 ]
 
 # TLS fingerprints для curl-cffi (имитация браузеров)
+# Безопасные targets, которые работают на большинстве систем
 IMPERSONATE_TARGETS = [
     'chrome120',
     'chrome110',
-    'safari15_5',
     'chrome99',
-    'safari15_3',
     'edge101',
+    'safari15_5',
+    'safari15_3',
 ]
 
 # Import CobaltClient only if USE_COBALT is enabled
@@ -48,6 +49,15 @@ if USE_COBALT and COBALT_API_URL:
     except Exception as e:
         logging.error(f"❌ Failed to initialize Cobalt client: {e}")
         cobalt_client = None
+
+# Diagnostic: Check curl_cffi availability
+try:
+    import curl_cffi
+    logging.info(f"✅ curl_cffi {curl_cffi.__version__} available for TLS impersonation")
+except ImportError:
+    logging.warning(f"⚠️ curl_cffi not installed - TLS impersonation disabled")
+except Exception as e:
+    logging.error(f"❌ curl_cffi error: {e}")
 else:
     cobalt_client = None
     if not USE_COBALT:
@@ -291,7 +301,8 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: boo
                         ydl_opts['impersonate'] = impersonate_target
                         logging.info(f"🔒 Attempting TLS impersonation: {impersonate_target}")
                     except Exception as imp_err:
-                        logging.warning(f"⚠️ Failed to set impersonate={impersonate_target}: {imp_err}")
+                        logging.error(f"❌ Failed to set impersonate={impersonate_target}: {imp_err}")
+                        # Don't retry with impersonate if setting fails
                         use_impersonate = False
                 
                 # Reddit-specific configuration to avoid blocks
@@ -353,6 +364,16 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: boo
             except Exception as e:
                 error_str = str(e)
                 error_type = type(e).__name__
+                
+                # Detailed diagnostics for AssertionError (curl_cffi issue)
+                if isinstance(e, AssertionError):
+                    import traceback
+                    tb_lines = traceback.format_exception(type(e), e, e.__traceback__)
+                    tb_str = ''.join(tb_lines[-5:])  # Last 5 lines
+                    logging.error(f"❌ AssertionError in yt-dlp (curl_cffi failure):")
+                    logging.error(f"   Target: {impersonate_target if use_impersonate else 'none'}")
+                    logging.error(f"   Message: {error_str if error_str else '(empty)'}")
+                    logging.error(f"   Traceback (last 5 lines):\n{tb_str}")
                 
                 # If impersonate failed, try without it
                 if use_impersonate and (not error_str or "impersonate" in error_str.lower() or error_type == "AssertionError"):

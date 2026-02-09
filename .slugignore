@@ -1,0 +1,28 @@
+# Docker-специфичные файлы (не нужны на Heroku)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Git
+.git
+.gitignore
+
+# Development
+.vscode
+.idea
+*.pyc
+__pycache__
+*.log
+
+# Tests
+test_*.py
+
+# Documentation (если большая)
+docs/
+*.md
+
+# Локальные данные (не нужны в слаге)
+downloads/
+logs/
+data/users.json
+data/stats.json
