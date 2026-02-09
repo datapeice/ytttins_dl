@@ -2,6 +2,7 @@ import uuid
 import re
 import logging
 import asyncio
+import time
 from pathlib import Path
 from aiogram import Router, types, F
 from aiogram.filters import Command
@@ -202,7 +203,13 @@ async def handle_url(message: types.Message):
                    video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
                 
                 logging.info(f"Sending video with kwargs: {video_kwargs}")
+                
+                # Measure upload time to Telegram
+                upload_start = time.time()
                 await message.answer_video(**video_kwargs)
+                upload_time = time.time() - upload_start
+                file_size_mb = file_path.stat().st_size / (1024 * 1024)
+                logging.info(f"✅ Video uploaded to Telegram in {upload_time:.1f}s ({file_size_mb:.2f}MB, {file_size_mb/upload_time:.2f}MB/s)")
             
             file_path.unlink()
             if thumbnail_path and thumbnail_path.exists():
@@ -406,7 +413,13 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
                    video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
                 
                 logging.info(f"Sending video with kwargs: {video_kwargs}")
+                
+                # Measure upload time to Telegram
+                upload_start = time.time()
                 await callback.message.answer_video(**video_kwargs)
+                upload_time = time.time() - upload_start
+                file_size_mb = file_path.stat().st_size / (1024 * 1024)
+                logging.info(f"✅ Video uploaded to Telegram in {upload_time:.1f}s ({file_size_mb:.2f}MB, {file_size_mb/upload_time:.2f}MB/s)")
                 
                 file_path.unlink()
                 if thumbnail_path and thumbnail_path.exists():

@@ -282,11 +282,17 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: boo
                     'noplaylist': True,
                     'quiet': False,
                     'verbose': True,
+                    'legacy_server_connect': True,  # GitHub: helps with old TLS configs & Cloudflare
                 }
                 
                 # Имитация TLS-отпечатка браузера через curl-cffi (если поддерживается)
                 if use_impersonate:
-                    ydl_opts['impersonate'] = impersonate_target
+                    try:
+                        ydl_opts['impersonate'] = impersonate_target
+                        logging.info(f"🔒 Attempting TLS impersonation: {impersonate_target}")
+                    except Exception as imp_err:
+                        logging.warning(f"⚠️ Failed to set impersonate={impersonate_target}: {imp_err}")
+                        use_impersonate = False
                 
                 # Reddit-specific configuration to avoid blocks
                 if "reddit.com" in url or "redd.it" in url:
@@ -346,10 +352,12 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: boo
                     
             except Exception as e:
                 error_str = str(e)
+                error_type = type(e).__name__
                 
                 # If impersonate failed, try without it
-                if use_impersonate and (not error_str or "impersonate" in error_str.lower()):
-                    logging.warning(f"Impersonate failed (attempt {attempt}), retrying without it...")
+                if use_impersonate and (not error_str or "impersonate" in error_str.lower() or error_type == "AssertionError"):
+                    logging.warning(f"⚠️ Impersonate failed ({error_type}): {error_str[:100] if error_str else 'empty'}")
+                    logging.info(f"Retrying attempt {attempt} without TLS impersonation...")
                     continue
                 
                 # Check if it's a 403 error
