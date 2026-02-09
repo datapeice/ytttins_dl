@@ -19,6 +19,16 @@ from database.storage import stats
 from database.models import Cookie
 from services.tiktok_scraper import download_tiktok_images
 
+# User-agents для обхода блокировок
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0',
+]
+
 # Import CobaltClient only if USE_COBALT is enabled
 if USE_COBALT and COBALT_API_URL:
     try:
@@ -138,23 +148,34 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             logging.warning(f"Failed to resolve TikTok URL: {e}")
     
     # Resolve Reddit short URLs (reddit.com/r/.../s/...) to full URLs
-    # Use GET with user agent to avoid 403, and follow all redirects
+    # Use GET with rotating user agents to avoid 403, and follow all redirects
     if "reddit.com" in url and "/s/" in url:
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, allow_redirects=True, timeout=10) as resp:
-                    final_url = str(resp.url)
-                    # Keep resolving if still a short URL
-                    if "/s/" in final_url and final_url != url:
-                        async with session.get(final_url, headers=headers, allow_redirects=True, timeout=10) as resp2:
-                            final_url = str(resp2.url)
-                    url = final_url
-                    logging.info(f"Resolved Reddit URL to: {url}")
-        except Exception as e:
-            logging.warning(f"Failed to resolve Reddit URL: {e}")
+        resolved = False
+        for attempt, user_agent in enumerate(USER_AGENTS, 1):
+            try:
+                headers = {'User-Agent': user_agent}
+                async with aiohttp.ClientSession() as session:
+                    # Try multiple redirect hops
+                    current_url = url
+                    for hop in range(5):  # Max 5 redirect hops
+                        async with session.get(current_url, headers=headers, allow_redirects=True, timeout=10) as resp:
+                            final_url = str(resp.url)
+                            if "/s/" not in final_url or final_url == current_url:
+                                # Successfully resolved to non-short URL
+                                url = final_url
+                                logging.info(f"✅ Resolved Reddit URL to: {url} (attempt {attempt}, hop {hop+1})")
+                                resolved = True
+                                break
+                            current_url = final_url
+                    if resolved:
+                        break
+            except Exception as e:
+                logging.warning(f"Attempt {attempt} to resolve Reddit URL failed: {e}")
+                if attempt == len(USER_AGENTS):
+                    logging.error(f"Failed to resolve Reddit URL after {len(USER_AGENTS)} attempts")
+        
+        if not resolved:
+            logging.warning(f"Could not fully resolve Reddit short URL, using: {url}")
 
     # Strip query parameters (they often confuse extractors or contain tracking)
     if '?' in url:
@@ -232,69 +253,91 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
 
 
 async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: bool = False) -> Tuple[Path, Optional[Path], Dict]:
-    """Универсальный метод для YouTube/Instagram/музыки через yt-dlp"""
+    """Универсальный метод для YouTube/Instagram/музыки через yt-dlp с retry на 403"""
     unique_id = uuid.uuid4().hex[:8]
     output_template = str(DOWNLOADS_DIR / f"%(title)s_%(id)s_{unique_id}.%(ext)s")
     cookie_file = DATA_DIR / "cookies.txt"
     
-    ydl_opts = {
-        'outtmpl': output_template,
-        'cookiefile': cookie_file if cookie_file.exists() else None,
-        'noplaylist': True,
-        'quiet': False,
-        'verbose': True,
-    }
-    
-    # Reddit-specific configuration to avoid blocks
-    if "reddit.com" in url or "redd.it" in url:
-        ydl_opts['extractor_args'] = {
-            'reddit': {
-                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36'
+    # Try multiple user-agents if we get 403
+    last_error = None
+    for attempt, user_agent in enumerate(USER_AGENTS, 1):
+        try:
+            ydl_opts = {
+                'outtmpl': output_template,
+                'cookiefile': cookie_file if cookie_file.exists() else None,
+                'noplaylist': True,
+                'quiet': False,
+                'verbose': True,
             }
-        }
-    
-    # Добавляем прокси, если запрошено и настроено
-    if use_proxy and SOCKS_PROXY:
-        ydl_opts['proxy'] = SOCKS_PROXY
-    
-    if is_music:
-        # Только аудио
-        ydl_opts['format'] = 'bestaudio/best'
-        ydl_opts['postprocessors'] = [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '320',
-        }]
-    else:
-        # Видео с H.264 кодеком
-        ydl_opts['format'] = 'best[vcodec^=h264]/best[vcodec^=avc]/best'
-    
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        
-        metadata = {
-            'title': info.get('title', 'Media'),
-            'uploader': info.get('uploader', 'Unknown'),
-            'webpage_url': info.get('webpage_url', url),
-            'duration': info.get('duration', 0),
-            'width': info.get('width', 0),
-            'height': info.get('height', 0),
-        }
-        
-        # Находим скачанный файл
-        downloaded_files = list(DOWNLOADS_DIR.glob(f"*{unique_id}*"))
-        
-        if not downloaded_files:
-            path = Path(ydl.prepare_filename(info))
-            if path.exists():
-                downloaded_files = [path]
+            
+            # Reddit-specific configuration to avoid blocks
+            if "reddit.com" in url or "redd.it" in url:
+                ydl_opts['extractor_args'] = {
+                    'reddit': {
+                        'user_agent': user_agent
+                    }
+                }
+            
+            # Добавляем прокси, если запрошено и настроено
+            if use_proxy and SOCKS_PROXY:
+                ydl_opts['proxy'] = SOCKS_PROXY
+            
+            if is_music:
+                # Только аудио
+                ydl_opts['format'] = 'bestaudio/best'
+                ydl_opts['postprocessors'] = [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '320',
+                }]
             else:
-                raise ValueError("Download failed: file not found")
-        
-        file_path = downloaded_files[0]
-        logging.info(f"Downloaded: {file_path.name}")
-        
-        return file_path, None, metadata
+                # Видео с H.264 кодеком
+                ydl_opts['format'] = 'best[vcodec^=h264]/best[vcodec^=avc]/best'
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                
+                metadata = {
+                    'title': info.get('title', 'Media'),
+                    'uploader': info.get('uploader', 'Unknown'),
+                    'webpage_url': info.get('webpage_url', url),
+                    'duration': info.get('duration', 0),
+                    'width': info.get('width', 0),
+                    'height': info.get('height', 0),
+                }
+                
+                # Находим скачанный файл
+                downloaded_files = list(DOWNLOADS_DIR.glob(f"*{unique_id}*"))
+                
+                if not downloaded_files:
+                    path = Path(ydl.prepare_filename(info))
+                    if path.exists():
+                        downloaded_files = [path]
+                    else:
+                        raise ValueError("Download failed: file not found")
+                
+                file_path = downloaded_files[0]
+                logging.info(f"Downloaded: {file_path.name}")
+                
+                if attempt > 1:
+                    logging.info(f"✅ Success with user-agent {attempt}/{len(USER_AGENTS)}")
+                
+                return file_path, None, metadata
+                
+        except Exception as e:
+            error_str = str(e)
+            # Check if it's a 403 error
+            if "403" in error_str or "Blocked" in error_str or "Forbidden" in error_str:
+                logging.warning(f"Attempt {attempt}/{len(USER_AGENTS)} failed with 403: {error_str[:100]}")
+                last_error = e
+                if attempt < len(USER_AGENTS):
+                    logging.info(f"Retrying with different user-agent...")
+                    continue
+            # If not 403 or last attempt, raise immediately
+            raise e
+    
+    # All attempts failed with 403
+    raise last_error if last_error else Exception("All user-agent attempts failed")
 
 
 async def _download_local_tiktok(url: str, use_proxy: bool = False) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
