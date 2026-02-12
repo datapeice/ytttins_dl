@@ -1,4 +1,3 @@
-import grpc
 import logging
 import os
 import uuid
@@ -11,11 +10,7 @@ import concurrent.futures
 from pathlib import Path
 from typing import Tuple, Dict, Optional, Callable, Union, List
 
-# Импортируем сгенерированные gRPC файлы
-import protos.downloader_pb2 as pb2
-import protos.downloader_pb2_grpc as pb2_grpc
-
-from config import DOWNLOADS_DIR, DATA_DIR, COOKIES_CONTENT, HOME_SERVER_ADDRESS, USE_COBALT, COBALT_API_URL, SOCKS_PROXY
+from config import DOWNLOADS_DIR, DATA_DIR, COOKIES_CONTENT, USE_COBALT, COBALT_API_URL, SOCKS_PROXY
 from database.storage import stats
 from database.models import Cookie
 from services.tiktok_scraper import download_tiktok_images
@@ -83,7 +78,6 @@ except ImportError:
 except Exception as e:
     logging.error(f"❌ curl_cffi error: {e}")
 else:
-    cobalt_client = None
     if not USE_COBALT:
         logging.info("ℹ️ Cobalt disabled (USE_COBALT=false)")
     elif not COBALT_API_URL:
@@ -203,10 +197,61 @@ def unshorten_reddit_url(url: str, proxy_url: Optional[str]) -> str:
         logging.warning(f"Failed to unshorten Reddit URL: {e}")
         return url
 
+def _run_ytdlp_extract(ydl_opts: Dict, url: str) -> Tuple[Dict, str]:
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        prepared_name = ydl.prepare_filename(info)
+    return info, prepared_name
+
+def _select_best_downloaded_file(files: List[Path]) -> Path:
+    if not files:
+        raise ValueError("Download failed: file not found")
+
+    video_exts = {".mp4", ".mkv", ".mov", ".webm", ".m4v", ".avi", ".flv", ".ts", ".unknown_video"}
+    candidates = [f for f in files if f.suffix.lower() in video_exts]
+    if not candidates:
+        candidates = files
+
+    def size_or_zero(path: Path) -> int:
+        try:
+            return path.stat().st_size
+        except Exception:
+            return 0
+
+    return max(candidates, key=size_or_zero)
+
+def _cleanup_extra_files(files: List[Path], keep: Path) -> None:
+    for path in files:
+        if path == keep:
+            continue
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception:
+            pass
+
 # === Основная логика ===
 
 async def download_media(url: str, is_music: bool = False, video_height: int = None, progress_callback: Optional[Callable] = None) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
     logging.info(f"Using yt-dlp version: {yt_dlp.version.__version__}")
+
+    async def maybe_add_instagram_audio(files: List[Path]) -> List[Path]:
+        if not cobalt_client:
+            return files
+        try:
+            audio_path, _, _ = await cobalt_client.download_media(
+                url=url,
+                quality="1080",
+                is_audio=True,
+                progress_callback=progress_callback
+            )
+            if audio_path:
+                if isinstance(audio_path, list):
+                    return files + audio_path
+                return files + [audio_path]
+        except Exception as audio_error:
+            logging.error(f"[COBALT] ❌ Error (Instagram audio): {audio_error}")
+        return files
     
     # Resolve short URLs to detect slideshows and help yt-dlp
     if "vm.tiktok.com" in url or "vt.tiktok.com" in url or "/t/" in url:
@@ -227,10 +272,11 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         except Exception as e:
             logging.warning(f"Failed to resolve Reddit short URL via proxy: {e}")
 
-    # Strip query parameters (they often confuse extractors or contain tracking)
-    if '?' in url:
-        url = url.split('?')[0]
     platform = get_platform(url)
+
+    # Strip query parameters (they often confuse extractors or contain tracking)
+    if '?' in url and platform not in ("youtube", "instagram"):
+        url = url.split('?')[0]
     
     # Показываем смешной статус сразу
     if progress_callback:
@@ -240,8 +286,6 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     # Prefer Cobalt on Heroku for Reddit (yt-dlp impersonate fails on Heroku)
     if platform == "reddit" and IS_HEROKU and cobalt_client:
         try:
-            if progress_callback:
-                await progress_callback("🛡️ Reddit: using Cobalt (Heroku mode)")
             logging.info(f"[COBALT] Heroku-first attempt for Reddit: {url}")
             file_path, thumb_path, metadata = await cobalt_client.download_media(
                 url=url,
@@ -249,12 +293,38 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 is_audio=is_music,
                 progress_callback=progress_callback
             )
-            if file_path and file_path.exists():
-                logging.info(f"[COBALT] ✅ Success: {file_path.name}")
-                return file_path, thumb_path, metadata
+            if file_path:
+                    if isinstance(file_path, list):
+                        logging.info(f"[COBALT] ✅ Success: {len(file_path)} files")
+                        return file_path, thumb_path, metadata
+                    elif file_path.exists():
+                        logging.info(f"[COBALT] ✅ Success: {file_path.name}")
+                        return file_path, thumb_path, metadata
             logging.warning("[COBALT] ⚠️ No file returned")
         except Exception as cobalt_error:
             logging.error(f"[COBALT] ❌ Error (Heroku-first): {cobalt_error}")
+
+    # Prefer Cobalt for Instagram photos when available
+    if platform == "instagram" and cobalt_client and not is_music:
+        try:
+            logging.info(f"[COBALT] Instagram-first attempt: {url}")
+            file_path, thumb_path, metadata = await cobalt_client.download_media(
+                url=url,
+                quality="1080",
+                is_audio=is_music,
+                progress_callback=progress_callback
+            )
+            if file_path:
+                if isinstance(file_path, list):
+                    logging.info(f"[COBALT] ✅ Success: {len(file_path)} files")
+                    file_path = await maybe_add_instagram_audio(file_path)
+                    return file_path, thumb_path, metadata
+                if file_path.exists():
+                    logging.info(f"[COBALT] ✅ Success: {file_path.name}")
+                    return file_path, thumb_path, metadata
+            logging.warning("[COBALT] ⚠️ No file returned")
+        except Exception as cobalt_error:
+            logging.error(f"[COBALT] ❌ Error (Instagram-first): {cobalt_error}")
     
     # === МЕТОД 1: YT-DLP (основной) ===
     ytdlp_error = None
@@ -266,12 +336,34 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             return await _download_local_tiktok(url)
         
         # YouTube/Instagram/музыка через универсальный метод
-        return await _download_local_ytdlp(url, is_music)
+        return await _download_local_ytdlp(url, is_music, video_height=video_height)
         
     except Exception as e:
         ytdlp_error = str(e)
         logging.warning(f"[YT-DLP] ❌ Failed: {ytdlp_error}")
     
+    # If Instagram photo-only post, go straight to Cobalt fallback
+    if platform == "instagram" and cobalt_client and ytdlp_error and "There is no video in this post" in ytdlp_error:
+        try:
+            logging.info(f"[COBALT] Instagram fallback after photo-only error: {url}")
+            file_path, thumb_path, metadata = await cobalt_client.download_media(
+                url=url,
+                quality="1080",
+                is_audio=is_music,
+                progress_callback=progress_callback
+            )
+            if file_path:
+                if isinstance(file_path, list):
+                    logging.info(f"[COBALT] ✅ Success: {len(file_path)} files")
+                    file_path = await maybe_add_instagram_audio(file_path)
+                    return file_path, thumb_path, metadata
+                if file_path.exists():
+                    logging.info(f"[COBALT] ✅ Success: {file_path.name}")
+                    return file_path, thumb_path, metadata
+            logging.warning("[COBALT] ⚠️ No file returned")
+        except Exception as cobalt_error:
+            logging.error(f"[COBALT] ❌ Error (Instagram-photo fallback): {cobalt_error}")
+
     # === МЕТОД 1.5: YT-DLP С ПРОКСИ (fallback если есть прокси) ===
     if SOCKS_PROXY and ytdlp_error:
         try:
@@ -282,7 +374,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 return await _download_local_tiktok(url, use_proxy=True)
             
             # YouTube/Instagram/музыка с прокси
-            return await _download_local_ytdlp(url, is_music, use_proxy=True)
+            return await _download_local_ytdlp(url, is_music, video_height=video_height, use_proxy=True)
             
         except Exception as proxy_error:
             logging.warning(f"[YT-DLP+PROXY] ❌ Failed: {proxy_error}")
@@ -298,9 +390,13 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 is_audio=is_music,
                 progress_callback=progress_callback
             )
-            if file_path and file_path.exists():
-                logging.info(f"[COBALT] ✅ Success: {file_path.name}")
-                return file_path, thumb_path, metadata
+            if file_path:
+                if isinstance(file_path, list):
+                    logging.info(f"[COBALT] ✅ Success: {len(file_path)} files")
+                    return file_path, thumb_path, metadata
+                if file_path.exists():
+                    logging.info(f"[COBALT] ✅ Success: {file_path.name}")
+                    return file_path, thumb_path, metadata
             else:
                 logging.warning("[COBALT] ⚠️ No file returned")
         except Exception as cobalt_error:
@@ -309,9 +405,6 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     # === МЕТОД 3: TIKWM (только для TikTok) ===
     if platform == "tiktok":
         try:
-            if progress_callback:
-                await progress_callback("📥 Trying TikWM API...")
-            
             logging.info("[TIKWM] Attempting download...")
             return await _download_tiktok_tikwm(url)
         except Exception as tikwm_error:
@@ -321,13 +414,15 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     raise Exception(f"All download methods failed. YT-DLP error: {ytdlp_error}")
 
 
-async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: bool = False) -> Tuple[Path, Optional[Path], Dict]:
+async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: int = None, use_proxy: bool = False) -> Tuple[Path, Optional[Path], Dict]:
     """Универсальный метод для YouTube/Instagram/музыки через yt-dlp с retry на 403"""
     unique_id = uuid.uuid4().hex[:8]
     output_template = str(DOWNLOADS_DIR / f"%(title)s_%(id)s_{unique_id}.%(ext)s")
     cookie_file = DATA_DIR / "cookies.txt"
 
     is_reddit = "reddit.com" in url or "redd.it" in url
+    is_youtube = "youtube.com" in url or "youtu.be" in url
+    is_instagram = "instagram.com" in url
     
     # Try multiple user-agents if we get 403
     last_error = None
@@ -374,6 +469,15 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: boo
                             'user_agent': user_agent
                         }
                     }
+
+                if is_instagram:
+                    ydl_opts['noplaylist'] = False
+                    ydl_opts['extractor_args'] = {
+                        'instagram': {
+                            'include_videos': True,
+                            'include_pictures': True,
+                        }
+                    }
                 
                 # Добавляем прокси, если запрошено и настроено
                 if use_proxy and SOCKS_PROXY:
@@ -388,40 +492,53 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, use_proxy: boo
                         'preferredquality': '320',
                     }]
                 else:
-                    # Видео с H.264 кодеком
-                    ydl_opts['format'] = 'best[vcodec^=h264]/best[vcodec^=avc]/best'
+                    if is_youtube and video_height:
+                        ydl_opts['format'] = (
+                            f"bestvideo[height={video_height}][vcodec^=h264]"
+                            f"+bestaudio/best[height={video_height}]"
+                        )
+                        ydl_opts['merge_output_format'] = 'mp4'
+                    elif video_height:
+                        ydl_opts['format'] = f"best[height={video_height}]/best[height<={video_height}]/best"
+                    else:
+                        # Видео с H.264 кодеком
+                        ydl_opts['format'] = 'best[vcodec^=h264]/best[vcodec^=avc]/best'
                 
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                    
-                    metadata = {
-                        'title': info.get('title', 'Media'),
-                        'uploader': info.get('uploader', 'Unknown'),
-                        'webpage_url': info.get('webpage_url', url),
-                        'duration': info.get('duration', 0),
-                        'width': info.get('width', 0),
-                        'height': info.get('height', 0),
-                    }
-                    
-                    # Находим скачанный файл
-                    downloaded_files = list(DOWNLOADS_DIR.glob(f"*{unique_id}*"))
-                    
-                    if not downloaded_files:
-                        path = Path(ydl.prepare_filename(info))
-                        if path.exists():
-                            downloaded_files = [path]
-                        else:
-                            raise ValueError("Download failed: file not found")
-                    
-                    file_path = downloaded_files[0]
-                    logging.info(f"Downloaded: {file_path.name}")
-                    
-                    if use_impersonate and attempt > 1:
-                        logging.info(f"✅ Success with user-agent {attempt}/{len(USER_AGENTS)} + impersonate={impersonate_target}")
-                    elif not use_impersonate:
-                        logging.info(f"✅ Success without impersonate (attempt {attempt}/{len(USER_AGENTS)})")
-                    
-                    return file_path, None, metadata
+                info, prepared_name = await asyncio.to_thread(_run_ytdlp_extract, ydl_opts, url)
+
+                metadata = {
+                    'title': info.get('title', 'Media'),
+                    'uploader': info.get('uploader', 'Unknown'),
+                    'webpage_url': info.get('webpage_url', url),
+                    'duration': info.get('duration', 0),
+                    'width': info.get('width', 0),
+                    'height': info.get('height', 0),
+                }
+
+                # Находим скачанный файл
+                downloaded_files = list(DOWNLOADS_DIR.glob(f"*{unique_id}*"))
+
+                if not downloaded_files:
+                    path = Path(prepared_name)
+                    if path.exists():
+                        downloaded_files = [path]
+                    else:
+                        raise ValueError("Download failed: file not found")
+
+                if is_instagram and info.get("entries"):
+                    downloaded_files.sort(key=lambda p: p.name)
+                    return downloaded_files, None, metadata
+
+                file_path = _select_best_downloaded_file(downloaded_files)
+                _cleanup_extra_files(downloaded_files, file_path)
+                logging.info(f"Downloaded: {file_path.name}")
+
+                if use_impersonate and attempt > 1:
+                    logging.info(f"✅ Success with user-agent {attempt}/{len(USER_AGENTS)} + impersonate={impersonate_target}")
+                elif not use_impersonate:
+                    logging.info(f"✅ Success without impersonate (attempt {attempt}/{len(USER_AGENTS)})")
+
+                return file_path, None, metadata
                     
             except Exception as e:
                 error_str = str(e)
@@ -500,151 +617,53 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False) -> Tuple[Uni
         ydl_opts = ydl_opts_base.copy()
         ydl_opts['format'] = 'best[vcodec^=h264]/best[vcodec^=avc]'
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        
-        metadata = {
-            'title': info.get('title', 'TikTok Media'),
-            'uploader': info.get('uploader', 'Unknown'),
-            'webpage_url': info.get('webpage_url', url),
-            'duration': info.get('duration', 0),
-            'width': info.get('width', 0),
-            'height': info.get('height', 0),
-        }
-        
-        # Determine downloaded files
-        # We search by unique_id to catch all files (images, mp3, mp4)
-        downloaded_files = list(DOWNLOADS_DIR.glob(f"*{unique_id}*"))
-        
-        if not downloaded_files:
-            # Fallback to prepare_filename
-            path = Path(ydl.prepare_filename(info))
-            if path.exists():
-                downloaded_files = [path]
-            else:
-                 raise ValueError("Download failed: file not found")
+    info, prepared_name = await asyncio.to_thread(_run_ytdlp_extract, ydl_opts, url)
 
-        if is_slideshow:
-            return downloaded_files, None, metadata
-        
-        # Video handling - проверяем кодек, только H264 разрешён для yt-dlp
-        video_files = [f for f in downloaded_files if f.suffix in ['.mp4', '.mov']]
-        if video_files:
-            path = video_files[0]
-            vcodec = info.get('vcodec', 'unknown')
-            if vcodec: vcodec = vcodec.lower()
-            
-            # Только H264/AVC допустимы для локального yt-dlp
-            is_h264 = 'avc' in vcodec or 'h264' in vcodec
-            if not is_h264 and 'unknown' not in vcodec:
-                # Удаляем файл и бросаем исключение для fallback на tikwm
-                for f in downloaded_files:
-                    if f.exists(): f.unlink()
-                raise ValueError(f"Codec {vcodec} not H264, trying tikwm fallback")
-            
-            return path, None, metadata
-            
-        return downloaded_files[0], None, metadata
+    metadata = {
+        'title': info.get('title', 'TikTok Media'),
+        'uploader': info.get('uploader', 'Unknown'),
+        'webpage_url': info.get('webpage_url', url),
+        'duration': info.get('duration', 0),
+        'width': info.get('width', 0),
+        'height': info.get('height', 0),
+    }
 
+    # Determine downloaded files
+    # We search by unique_id to catch all files (images, mp3, mp4)
+    downloaded_files = list(DOWNLOADS_DIR.glob(f"*{unique_id}*"))
 
-async def _download_remote_grpc(url: str, is_music: bool, video_height: int, progress_callback: Optional[Callable] = None) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
-    """Отправляет задачу на домашний сервер"""
+    if not downloaded_files:
+        # Fallback to prepare_filename
+        path = Path(prepared_name)
+        if path.exists():
+            downloaded_files = [path]
+        else:
+             raise ValueError("Download failed: file not found")
+
+    if is_slideshow:
+        return downloaded_files, None, metadata
     
-    async with grpc.aio.insecure_channel(HOME_SERVER_ADDRESS) as channel:
-        stub = pb2_grpc.DownloaderServiceStub(channel)
+    # Video handling - проверяем кодек, только H264 разрешён для yt-dlp
+    video_files = [f for f in downloaded_files if f.suffix in ['.mp4', '.mov']]
+    if video_files:
+        path = _select_best_downloaded_file(video_files)
+        vcodec = info.get('vcodec', 'unknown')
+        if vcodec: vcodec = vcodec.lower()
         
-        cookies = get_cookies_content()
+        # Только H264/AVC допустимы для локального yt-dlp
+        is_h264 = 'avc' in vcodec or 'h264' in vcodec
+        if not is_h264 and 'unknown' not in vcodec:
+            # Удаляем файл и бросаем исключение для fallback на tikwm
+            for f in downloaded_files:
+                if f.exists(): f.unlink()
+            raise ValueError(f"Codec {vcodec} not H264, trying tikwm fallback")
         
-        request = pb2.DownloadRequest(
-            url=url,
-            is_music=is_music,
-            video_height=video_height or 0,
-            cookies_content=cookies
-        )
+        return path, None, metadata
         
-        temp_id = uuid.uuid4().hex
-        ext = 'mp3' if is_music else 'mp4'
-        temp_media = DOWNLOADS_DIR / f"temp_{temp_id}.{ext}"
-        temp_thumb = DOWNLOADS_DIR / f"temp_{temp_id}.jpg"
-        
-        metadata = {}
-        final_path = None
-        thumbnail_path = None
-        
-        media_file = None
-        thumb_file = None
-        has_thumb = False
-        
-        # --- ЗАПУСК ФОНОВОЙ ЗАДАЧИ С ШУТКАМИ ---
-        status_task = None
-        if progress_callback:
-            async def funny_status_loop():
-                try:
-                    while True:
-                        msg = random.choice(FUNNY_STATUSES)
-                        try:
-                            # Обновленный формат сообщения
-                            await progress_callback(f"Downloading... It can take more time\n\n⏳ {msg}")
-                        except Exception:
-                            pass 
-                        await asyncio.sleep(3)
-                except asyncio.CancelledError:
-                    pass
+    selected_path = _select_best_downloaded_file(downloaded_files)
+    _cleanup_extra_files(downloaded_files, selected_path)
+    return selected_path, None, metadata
 
-            status_task = asyncio.create_task(funny_status_loop())
-
-        try:
-            media_file = open(temp_media, 'wb')
-            thumb_file = open(temp_thumb, 'wb')
-            
-            async for response in stub.DownloadMedia(request):
-                if response.HasField('metadata'):
-                    meta = response.metadata
-                    metadata = {
-                        'title': meta.title,
-                        'uploader': meta.uploader,
-                        'webpage_url': meta.webpage_url,
-                        'duration': meta.duration,
-                        'width': meta.width,
-                        'height': meta.height,
-                    }
-                    clean_name = "".join(x for x in meta.filename if x.isalnum() or x in "._- ")
-                    final_path = DOWNLOADS_DIR / clean_name
-                    
-                elif response.HasField('thumbnail_chunk'):
-                    thumb_file.write(response.thumbnail_chunk)
-                    has_thumb = True
-                    
-                elif response.HasField('file_chunk'):
-                    media_file.write(response.file_chunk)
-            
-            media_file.close()
-            thumb_file.close()
-            
-            if final_path:
-                if final_path.exists(): final_path.unlink()
-                temp_media.rename(final_path)
-            else:
-                final_path = temp_media
-                
-            if has_thumb:
-                thumbnail_path = final_path.with_suffix('.jpg')
-                if thumbnail_path.exists(): thumbnail_path.unlink()
-                temp_thumb.rename(thumbnail_path)
-            else:
-                temp_thumb.unlink(missing_ok=True)
-                
-            return final_path, thumbnail_path, metadata
-
-        except Exception as e:
-            if media_file and not media_file.closed: media_file.close()
-            if thumb_file and not thumb_file.closed: thumb_file.close()
-            if temp_media.exists(): temp_media.unlink()
-            if temp_thumb.exists(): temp_thumb.unlink()
-            raise e
-        finally:
-            if status_task:
-                status_task.cancel()
 
 async def _download_tiktok_tikwm(url: str) -> Tuple[Path, Optional[Path], Dict]:
     """Fallback: download TikTok video using tikwm.com API when yt-dlp fails"""
@@ -731,28 +750,3 @@ async def _download_tiktok_tikwm(url: str) -> Tuple[Path, Optional[Path], Dict]:
     }
     
     return video_path, thumbnail_path, metadata
-
-# --- ФУНКЦИИ ДЛЯ АДМИНКИ (ВЕРСИИ) ---
-
-async def get_worker_version() -> str:
-    """Запрашивает версию yt-dlp у воркера"""
-    try:
-        async with grpc.aio.insecure_channel(HOME_SERVER_ADDRESS) as channel:
-            stub = pb2_grpc.DownloaderServiceStub(channel)
-            response = await stub.GetVersion(pb2.Empty(), timeout=2)
-            return response.version
-    except Exception as e:
-        return "Offline 🔴"
-
-async def update_worker_ytdlp() -> str:
-    """Отправляет команду обновления воркеру"""
-    try:
-        async with grpc.aio.insecure_channel(HOME_SERVER_ADDRESS) as channel:
-            stub = pb2_grpc.DownloaderServiceStub(channel)
-            response = await stub.UpdateYtdlp(pb2.Empty(), timeout=60)
-            if response.success:
-                return f"✅ Worker updated to {response.new_version}"
-            else:
-                return f"❌ Worker update failed: {response.message}"
-    except Exception as e:
-        return f"❌ Worker connection failed: {str(e)}"

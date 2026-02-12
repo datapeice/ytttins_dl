@@ -3,6 +3,7 @@ import re
 import logging
 import asyncio
 import time
+import subprocess
 from pathlib import Path
 from aiogram import Router, types, F
 from aiogram.filters import Command
@@ -15,6 +16,13 @@ from config import DOWNLOADS_DIR
 
 router = Router()
 url_cache = {}
+
+def resolve_user_identity(user: types.User) -> tuple[str, str, str]:
+    display_name = user.full_name or user.first_name or "Unknown"
+    username = user.username or ""
+    stored_name = username or display_name
+    handle = f"@{username}" if username else display_name
+    return display_name, stored_name, handle
 
 def format_caption(metadata: dict, platform: str) -> str:
     """Generate unified caption format for all platforms."""
@@ -29,6 +37,32 @@ def format_caption(metadata: dict, platform: str) -> str:
         f"Developed by @datapeice"
     )
     return caption
+
+def probe_media_duration_seconds(media_path: Path) -> int:
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(media_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return 0
+        duration_str = result.stdout.strip()
+        if not duration_str:
+            return 0
+        return int(float(duration_str))
+    except Exception:
+        return 0
 
 
 @router.message(Command("start"))
@@ -98,21 +132,20 @@ async def handle_url(message: types.Message):
         else:
             title = file_path.stem
 
+        display_name, stored_name, handle = resolve_user_identity(message.from_user)
         stats.add_active_user(message.from_user.id)
         stats.add_download(
             content_type='Music' if is_music else 'Video',
             user_id=message.from_user.id,
-            username=message.from_user.username or "No username",
+            username=stored_name,
             platform=platform,
             url=message.text,
             title=title
         )
 
-        user_fullname = message.from_user.full_name
-        username = message.from_user.username or "No username"
         user_id = message.from_user.id
         download_logger.info(
-            f"User: {user_fullname} (@{username}, ID: {user_id}) | "
+            f"User: {display_name} ({handle}, ID: {user_id}) | "
             f"Platform: {platform} | "
             f"Type: {'Music' if is_music else 'Video'} | "
             f"URL: {message.text}"
@@ -121,26 +154,40 @@ async def handle_url(message: types.Message):
         if isinstance(file_path, list):
             await update_status("📤 Uploading slideshow to Telegram...")
             
-            # Separate images and audio
-            image_files = [f for f in file_path if f.suffix.lower() in ['.jpg', '.jpeg', '.png', '.webp']]
-            audio_files = [f for f in file_path if f.suffix.lower() in ['.mp3', '.m4a', '.wav']]
+            # Separate media types
+            image_exts = ['.jpg', '.jpeg', '.png', '.webp']
+            video_exts = ['.mp4', '.mov', '.webm', '.mkv']
+            audio_exts = ['.mp3', '.m4a', '.wav']
+
+            image_files = [f for f in file_path if f.suffix.lower() in image_exts]
+            video_files = [f for f in file_path if f.suffix.lower() in video_exts]
+            audio_files = [f for f in file_path if f.suffix.lower() in audio_exts]
             
             # Prepare unified caption
             caption = format_caption(metadata, platform)
 
-            # Send images as media group
-            if image_files:
-                media_group = []
-                for i, photo_path in enumerate(image_files):
-                    # Attach caption only to the first item
+            media_group = []
+            ordered_files = sorted(image_files + video_files, key=lambda p: p.name)
+            for i, media_path in enumerate(ordered_files):
+                caption_text = caption if i == 0 else ""
+                parse_mode = 'HTML' if i == 0 else None
+                if media_path.suffix.lower() in image_exts:
                     media_item = types.InputMediaPhoto(
-                        media=types.FSInputFile(photo_path),
-                        caption=caption if i == 0 else "",
-                        parse_mode='HTML' if i == 0 else None
+                        media=types.FSInputFile(media_path),
+                        caption=caption_text,
+                        parse_mode=parse_mode
                     )
-                    media_group.append(media_item)
+                else:
+                    media_item = types.InputMediaVideo(
+                        media=types.FSInputFile(media_path),
+                        caption=caption_text,
+                        parse_mode=parse_mode,
+                        supports_streaming=True
+                    )
+                media_group.append(media_item)
 
-                # Split into chunks of 10 (Telegram limit)
+            # Split into chunks of 10 (Telegram limit)
+            if media_group:
                 chunk_size = 10
                 for i in range(0, len(media_group), chunk_size):
                     chunk = media_group[i:i + chunk_size]
@@ -170,6 +217,19 @@ async def handle_url(message: types.Message):
             # Use unified caption format
             caption = format_caption(metadata, platform)
 
+            image_exts = ['.jpg', '.jpeg', '.png', '.webp']
+            if file_path.suffix.lower() in image_exts:
+                await message.answer_photo(
+                    types.FSInputFile(file_path),
+                    caption=caption,
+                    parse_mode='HTML'
+                )
+                file_path.unlink()
+                if thumbnail_path and thumbnail_path.exists():
+                    thumbnail_path.unlink()
+                await status_message.delete()
+                return
+
             if is_music:
                 if thumbnail_path:
                     await message.answer_audio(
@@ -187,9 +247,13 @@ async def handle_url(message: types.Message):
                         parse_mode='HTML'
                     )
             else:
+                duration_value = int(metadata.get('duration', 0))
+                if duration_value <= 0:
+                    duration_value = probe_media_duration_seconds(file_path)
+
                 video_kwargs = {
                     'video': types.FSInputFile(file_path),
-                    'duration': int(metadata.get('duration', 0)),
+                    'duration': duration_value,
                     'supports_streaming': True,
                     'caption': caption,
                     'parse_mode': 'HTML'
@@ -223,9 +287,7 @@ async def handle_url(message: types.Message):
         logging.error(f"Error: {error_msg}")
         
         # User-friendly error messages
-        if "No working app info" in error_msg or "tiktok:sound" in error_msg or "music" in error_msg.lower():
-            user_error = "❌ TikTok sound/music links are not supported. Please send a video link instead."
-        elif "Unsupported URL" in error_msg:
+        if "Unsupported URL" in error_msg:
             user_error = "❌ This URL is not supported. Please try a different link."
         elif "Private video" in error_msg or "Login required" in error_msg:
             user_error = "❌ This video is private or requires login."
@@ -256,10 +318,10 @@ async def handle_format_selection(callback: types.CallbackQuery):
         if format_type == "video":
             builder = InlineKeyboardBuilder()
             resolutions = [("1080p", 1080), ("720p", 720), ("480p", 480), ("360p", 360)]
-            
+
             for label, height in resolutions:
                 builder.add(InlineKeyboardButton(
-                    text=label, 
+                    text=label,
                     callback_data=f"dl_res:{request_id}:{height}"
                 ))
             builder.adjust(2)
@@ -279,21 +341,20 @@ async def handle_format_selection(callback: types.CallbackQuery):
             is_music = True
             file_path, thumbnail_path, metadata = await download_media(url, is_music, progress_callback=update_status)
 
+            display_name, stored_name, handle = resolve_user_identity(callback.from_user)
             stats.add_active_user(callback.from_user.id)
             stats.add_download(
                 content_type='Music',
                 user_id=callback.from_user.id,
-                username=callback.from_user.username or "No username",
+                username=stored_name,
                 platform='youtube',
                 url=url,
                 title=file_path.stem
             )
 
-            user_fullname = callback.from_user.full_name
-            username = callback.from_user.username or "No username"
             user_id = callback.from_user.id
             download_logger.info(
-                f"User: {user_fullname} (@{username}, ID: {user_id}) | "
+                f"User: {display_name} ({handle}, ID: {user_id}) | "
                 f"Platform: youtube | "
                 f"Type: Audio | "
                 f"URL: {url}"
@@ -370,23 +431,27 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
                 pass
         
         try:
-            file_path, thumbnail_path, metadata = await download_media(url, is_music=False, video_height=int(height), progress_callback=update_status)
+            file_path, thumbnail_path, metadata = await download_media(
+                url,
+                is_music=False,
+                video_height=int(height),
+                progress_callback=update_status
+            )
 
+            display_name, stored_name, handle = resolve_user_identity(callback.from_user)
             stats.add_active_user(callback.from_user.id)
             stats.add_download(
                 content_type='Video',
                 user_id=callback.from_user.id,
-                username=callback.from_user.username or "No username",
+                username=stored_name,
                 platform='youtube',
                 url=url,
                 title=file_path.stem
             )
 
-            user_fullname = callback.from_user.full_name
-            username = callback.from_user.username or "No username"
             user_id = callback.from_user.id
             download_logger.info(
-                f"User: {user_fullname} (@{username}, ID: {user_id}) | "
+                f"User: {display_name} ({handle}, ID: {user_id}) | "
                 f"Platform: youtube | "
                 f"Type: Video ({height}p) | "
                 f"URL: {url}"
@@ -397,9 +462,13 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
                 
                 caption = format_caption(metadata, 'youtube')
 
+                duration_value = int(metadata.get('duration', 0))
+                if duration_value <= 0:
+                    duration_value = probe_media_duration_seconds(file_path)
+
                 video_kwargs = {
                     'video': types.FSInputFile(file_path),
-                    'duration': int(metadata.get('duration', 0)),
+                    'duration': duration_value,
                     'supports_streaming': True,
                     'caption': caption,
                     'parse_mode': 'HTML'

@@ -1,8 +1,10 @@
 import logging
 import yt_dlp
 import asyncio
+import re
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -13,10 +15,40 @@ from config import ADMIN_USER_ID, DATA_DIR
 from database.storage import stats
 from database.models import Cookie, DownloadHistory
 
-# Импортируем функции для работы с воркером
-from services.downloader import get_worker_version, update_worker_ytdlp
-
 router = Router()
+
+def get_history_platform_label(url: str) -> str:
+    if not url:
+        return "Link"
+
+    url_lower = url.lower()
+    if "youtube.com" in url_lower or "youtu.be" in url_lower:
+        return "YouTube"
+    if "tiktok.com" in url_lower:
+        return "TikTok"
+    if "instagram.com" in url_lower:
+        return "Instagram"
+    if "twitter.com" in url_lower or "x.com" in url_lower:
+        return "X"
+    if "facebook.com" in url_lower or "fb.watch" in url_lower:
+        return "Facebook"
+    if "twitch.tv" in url_lower:
+        return "Twitch"
+    if "soundcloud.com" in url_lower:
+        return "SoundCloud"
+
+    domain = urlparse(url_lower).netloc
+    if domain.startswith("www."):
+        domain = domain[4:]
+    return domain or "Link"
+
+def format_history_username(username: str) -> str:
+    if not username:
+        return "Unknown"
+    safe_name = username.replace("_", "\\_")
+    if re.fullmatch(r"[A-Za-z0-9_]{5,}$", username):
+        return f"@{safe_name}"
+    return safe_name
 
 class BroadcastStates(StatesGroup):
     waiting_for_message = State()
@@ -74,8 +106,6 @@ async def send_admin_panel(message: types.Message):
     except:
         local_version = "Unknown"
 
-    # Получаем версию на Воркере
-    worker_version = await get_worker_version()
     
     whitelisted_list = "\n".join([f"  @{user}" for user in stats.whitelisted_users]) if stats.whitelisted_users else "  No whitelisted users"
 
@@ -87,9 +117,8 @@ async def send_admin_panel(message: types.Message):
         f"👥 Active Users (last 7 days): {weekly_stats['active_users_count']}\n\n"
         f"📝 Whitelisted Users:\n"
         f"{whitelisted_list}\n\n"
-        f"🔧 yt-dlp Versions:\n"
-        f"   🏠 VPS (Local): {local_version}\n"
-        f"   🏗 Worker (Home): {worker_version}\n\n"
+        f"🔧 yt-dlp Version:\n"
+        f"   🏠 VPS (Local): {local_version}\n\n"
     )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -100,7 +129,7 @@ async def send_admin_panel(message: types.Message):
         InlineKeyboardButton(text="📜 History", callback_data="admin:history")],
         [InlineKeyboardButton(text="📨 Broadcast Message", callback_data="admin:broadcast")],
         [InlineKeyboardButton(text="🍪 Update Cookies", callback_data="admin:update_cookies"),
-        InlineKeyboardButton(text="🔄 Update ALL yt-dlp", callback_data="admin:update_ytdlp")],
+        InlineKeyboardButton(text="🔄 Update yt-dlp", callback_data="admin:update_ytdlp")],
         [InlineKeyboardButton(text="📂 Get Logs", callback_data="admin:get_logs"),
         InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
     ])
@@ -271,9 +300,9 @@ async def handle_admin_callback(callback: types.CallbackQuery):
         
         report = []
         
-        # 1. Обновляем VPS
+        # Обновляем VPS
         try:
-            await status_msg.edit_text("```\n1/2 Updating VPS (Local)...\n```", parse_mode="Markdown")
+            await status_msg.edit_text("```\nUpdating VPS (Local)...\n```", parse_mode="Markdown")
             import subprocess
             import importlib
             
@@ -289,15 +318,7 @@ async def handle_admin_callback(callback: types.CallbackQuery):
             else:
                 report.append(f"❌ VPS: Failed ({result.stderr[:50]}...)")
         except Exception as e:
-             report.append(f"❌ VPS: Error ({str(e)})")
-
-        # 2. Обновляем Воркер
-        try:
-            await status_msg.edit_text(f"```\n{report[0]}\n2/2 Updating Worker (Home)...\n```", parse_mode="Markdown")
-            worker_result = await update_worker_ytdlp()
-            report.append(worker_result)
-        except Exception as e:
-            report.append(f"❌ Worker: Connection Error ({str(e)})")
+            report.append(f"❌ VPS: Error ({str(e)})")
 
         final_text = "\n".join(report)
         await status_msg.edit_text(
@@ -336,20 +357,11 @@ async def handle_admin_callback(callback: types.CallbackQuery):
                         for h in history:
                             date_str = h.timestamp.strftime('%d-%m %H:%M')
                             
-                            platform = "Link"
                             url = h.url if h.url else ""
-                            if "youtube.com" in url or "youtu.be" in url: platform = "YouTube"
-                            elif "tiktok.com" in url: platform = "TikTok"
-                            elif "instagram.com" in url: platform = "Instagram"
-                            elif "twitter.com" in url or "x.com" in url: platform = "X"
-                            elif "facebook.com" in url or "fb.watch" in url: platform = "Facebook"
-                            elif "twitch.tv" in url: platform = "Twitch"
-                            elif "soundcloud.com" in url: platform = "SoundCloud"
+                            platform = get_history_platform_label(url)
+                            display_username = format_history_username(h.username)
 
-                            username = h.username if h.username else "Unknown"
-                            username = username.replace("_", "\\_")
-
-                            text += f"`{date_str}` | @{username} | [{platform}]({url})\n"
+                            text += f"`{date_str}` | {display_username} | [{platform}]({url})\n"
                         
                         buttons = []
                         if page > 0:
@@ -395,20 +407,18 @@ async def handle_admin_callback(callback: types.CallbackQuery):
                                 date_str = dt.strftime('%d-%m %H:%M')
                                 
                                 rest = parts[1]
-                                import re
-                                username_match = re.search(r'\(@([^,]+),', rest)
-                                username = username_match.group(1) if username_match else "Unknown"
-                                username = username.replace("_", "\\_")
-                                
+                                handle_match = re.search(r'\(([^,]+), ID:', rest)
+                                handle_value = handle_match.group(1) if handle_match else "Unknown"
+                                if handle_value.startswith("@"):
+                                    handle_value = handle_value[1:]
+
                                 url_match = re.search(r'URL: (https?://\S+)', rest)
                                 url = url_match.group(1) if url_match else ""
-                                
-                                platform = "Link"
-                                if "youtube.com" in url or "youtu.be" in url: platform = "YouTube"
-                                elif "tiktok.com" in url: platform = "TikTok"
-                                elif "instagram.com" in url: platform = "Instagram"
-                                
-                                text += f"`{date_str}` | @{username} | [{platform}]({url})\n"
+
+                                platform = get_history_platform_label(url)
+                                display_username = format_history_username(handle_value)
+
+                                text += f"`{date_str}` | {display_username} | [{platform}]({url})\n"
                             except:
                                 pass
 
@@ -461,13 +471,14 @@ async def handle_admin_callback(callback: types.CallbackQuery):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="👥 Users List", callback_data="admin:users")],
             [InlineKeyboardButton(text="➕ Add User", callback_data="admin:add_user"),
-             InlineKeyboardButton(text="➖ Remove User", callback_data="admin:remove_user")],
+            InlineKeyboardButton(text="➖ Remove User", callback_data="admin:remove_user")],
             [InlineKeyboardButton(text="📊 Statistics", callback_data="admin:stats"),
-             InlineKeyboardButton(text="📜 History", callback_data="admin:history")],
+            InlineKeyboardButton(text="📜 History", callback_data="admin:history")],
+            [InlineKeyboardButton(text="📨 Broadcast Message", callback_data="admin:broadcast")],
             [InlineKeyboardButton(text="🍪 Update Cookies", callback_data="admin:update_cookies"),
-             InlineKeyboardButton(text="🔄 Update ALL yt-dlp", callback_data="admin:update_ytdlp")],
+            InlineKeyboardButton(text="🔄 Update ALL yt-dlp", callback_data="admin:update_ytdlp")],
             [InlineKeyboardButton(text="📂 Get Logs", callback_data="admin:get_logs"),
-             InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
+            InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
         ])
         
         if weekly_stats['active_users']:

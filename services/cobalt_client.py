@@ -1,5 +1,6 @@
 import logging
 import aiohttp
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple, Callable
 from config import COBALT_API_URL, COBALT_API_KEY, HTTP_PROXY, HTTPS_PROXY, DOWNLOADS_DIR
@@ -131,15 +132,11 @@ class CobaltClient:
             elif status == "redirect":
                 # Прямая ссылка на файл
                 file_url = response.get("url")
-                if progress_callback:
-                    await progress_callback("📥 Downloading from direct link...")
                 return await self._download_file(file_url, response, progress_callback)
             
             elif status == "tunnel":
                 # Cobalt проксирует файл через /tunnel
                 tunnel_url = response.get("url")
-                if progress_callback:
-                    await progress_callback("🌐 Downloading via Cobalt tunnel...")
                 return await self._download_file(tunnel_url, response, progress_callback)
             
             elif status == "picker":
@@ -200,10 +197,7 @@ class CobaltClient:
                             downloaded += len(chunk)
                             
                             # Обновляем прогресс
-                            if progress_callback and total_size > 0:
-                                percent = int((downloaded / total_size) * 100)
-                                if percent % 20 == 0:  # Каждые 20%
-                                    await progress_callback(f"⬇️ Downloading {percent}%...")
+                            # Keep download status message stable (funny status only)
             
             if not file_path.exists() or file_path.stat().st_size == 0:
                 raise Exception("Downloaded file is empty or doesn't exist")
@@ -211,9 +205,11 @@ class CobaltClient:
             logging.info(f"File downloaded: {file_path} ({file_path.stat().st_size} bytes)")
             
             # Формируем метаданные
+            uploader = metadata.get("author") or metadata.get("uploader") or metadata.get("creator") or "Unknown"
+            title = metadata.get("title") or filename.rsplit('.', 1)[0]
             result_metadata = {
-                "title": filename.rsplit('.', 1)[0],
-                "uploader": "Unknown",
+                "title": title,
+                "uploader": uploader,
                 "webpage_url": metadata.get("url", ""),
                 "duration": 0,
                 "width": 0,
@@ -240,24 +236,56 @@ class CobaltClient:
         if not picker_items:
             raise Exception("Picker response is empty")
         
-        # Для TikTok фото - скачиваем все
         file_paths = []
-        
+
+        def guess_extension(item_url: str, mime: Optional[str]) -> str:
+            if item_url:
+                path = urlparse(item_url).path
+                if "." in path:
+                    ext = Path(path).suffix.lower()
+                    if ext:
+                        return ext
+            if mime:
+                mime_lower = mime.lower()
+                if "jpeg" in mime_lower:
+                    return ".jpg"
+                if "png" in mime_lower:
+                    return ".png"
+                if "webp" in mime_lower:
+                    return ".webp"
+                if "mp3" in mime_lower:
+                    return ".mp3"
+                if "m4a" in mime_lower:
+                    return ".m4a"
+                if "aac" in mime_lower:
+                    return ".aac"
+                if "ogg" in mime_lower:
+                    return ".ogg"
+                if "mp4" in mime_lower:
+                    return ".mp4"
+            return ".bin"
+
         for idx, item in enumerate(picker_items):
             item_url = item.get("url")
-            if item_url:
-                try:
-                    file_path, _, _ = await self._download_file(
-                        item_url, 
-                        {"filename": f"tiktok_photo_{idx}.jpg"}
-                    )
-                    file_paths.append(file_path)
-                except Exception as e:
-                    logging.error(f"Failed to download picker item {idx}: {e}")
-        
+            if not item_url:
+                continue
+
+            mime = item.get("mime") or item.get("type")
+            ext = guess_extension(item_url, mime)
+            filename = f"picker_{idx}{ext}"
+
+            try:
+                file_path, _, _ = await self._download_file(
+                    item_url,
+                    {"filename": filename}
+                )
+                file_paths.append(file_path)
+            except Exception as e:
+                logging.error(f"Failed to download picker item {idx}: {e}")
+
         metadata = {
-            "title": "TikTok Photos",
-            "uploader": "Unknown",
+            "title": response.get("title") or "Carousel Media",
+            "uploader": response.get("author") or response.get("uploader") or response.get("creator") or "Unknown",
             "webpage_url": response.get("url", ""),
             "count": len(file_paths)
         }
