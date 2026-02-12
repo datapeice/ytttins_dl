@@ -492,19 +492,22 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                         'preferredquality': '320',
                     }]
                 else:
-                    if is_youtube and video_height:
-                        ydl_opts['format'] = (
-                            f"bestvideo[height={video_height}][vcodec^=h264]"
-                            f"+bestaudio/best[height={video_height}]"
-                        )
-                        ydl_opts['merge_output_format'] = 'mp4'
-                    elif video_height:
+                    if video_height:
                         ydl_opts['format'] = f"best[height={video_height}]/best[height<={video_height}]/best"
                     else:
                         # Видео с H.264 кодеком
                         ydl_opts['format'] = 'best[vcodec^=h264]/best[vcodec^=avc]/best'
                 
-                info, prepared_name = await asyncio.to_thread(_run_ytdlp_extract, ydl_opts, url)
+                try:
+                    info, prepared_name = await asyncio.to_thread(_run_ytdlp_extract, ydl_opts, url)
+                except Exception as extract_error:
+                    error_text = str(extract_error)
+                    if is_youtube and video_height and "Requested format is not available" in error_text:
+                        ydl_opts['format'] = 'best'
+                        ydl_opts.pop('merge_output_format', None)
+                        info, prepared_name = await asyncio.to_thread(_run_ytdlp_extract, ydl_opts, url)
+                    else:
+                        raise
 
                 metadata = {
                     'title': info.get('title', 'Media'),
