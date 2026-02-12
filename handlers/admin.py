@@ -450,9 +450,6 @@ async def handle_admin_callback(callback: types.CallbackQuery):
         except:
             local_version = "Unknown"
         
-        # Снова запрашиваем версию воркера
-        worker_version = await get_worker_version()
-        
         whitelisted_list = "\n".join([f"  @{user}" for user in stats.whitelisted_users]) if stats.whitelisted_users else "  No whitelisted users"
 
         stats_message = (
@@ -463,9 +460,8 @@ async def handle_admin_callback(callback: types.CallbackQuery):
             f"👥 Active Users (last 7 days): {weekly_stats['active_users_count']}\n\n"
             f"📝 Whitelisted Users:\n"
             f"{whitelisted_list}\n\n"
-            f"🔧 yt-dlp Versions:\n"
-            f"   🏠 VPS (Local): {local_version}\n"
-            f"   🏗 Worker (Home): {worker_version}\n\n"
+            f"🔧 yt-dlp Version:\n"
+            f"   🏠 VPS (Local): {local_version}\n\n"
         )
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -476,7 +472,7 @@ async def handle_admin_callback(callback: types.CallbackQuery):
             InlineKeyboardButton(text="📜 History", callback_data="admin:history")],
             [InlineKeyboardButton(text="📨 Broadcast Message", callback_data="admin:broadcast")],
             [InlineKeyboardButton(text="🍪 Update Cookies", callback_data="admin:update_cookies"),
-            InlineKeyboardButton(text="🔄 Update ALL yt-dlp", callback_data="admin:update_ytdlp")],
+            InlineKeyboardButton(text="🔄 Update yt-dlp", callback_data="admin:update_ytdlp")],
             [InlineKeyboardButton(text="📂 Get Logs", callback_data="admin:get_logs"),
             InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
         ])
