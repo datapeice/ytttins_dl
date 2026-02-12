@@ -38,31 +38,34 @@ def format_caption(metadata: dict, platform: str) -> str:
     )
     return caption
 
-def probe_media_duration_seconds(media_path: Path) -> int:
-    try:
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(media_path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
+async def probe_media_duration_seconds(media_path: Path) -> int:
+    def run_probe() -> int:
+        try:
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(media_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return 0
+            duration_str = result.stdout.strip()
+            if not duration_str:
+                return 0
+            return int(float(duration_str))
+        except Exception:
             return 0
-        duration_str = result.stdout.strip()
-        if not duration_str:
-            return 0
-        return int(float(duration_str))
-    except Exception:
-        return 0
+
+    return await asyncio.to_thread(run_probe)
 
 
 @router.message(Command("start"))
@@ -249,7 +252,7 @@ async def handle_url(message: types.Message):
             else:
                 duration_value = int(metadata.get('duration', 0))
                 if duration_value <= 0:
-                    duration_value = probe_media_duration_seconds(file_path)
+                    duration_value = await probe_media_duration_seconds(file_path)
 
                 video_kwargs = {
                     'video': types.FSInputFile(file_path),
@@ -464,7 +467,7 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
 
                 duration_value = int(metadata.get('duration', 0))
                 if duration_value <= 0:
-                    duration_value = probe_media_duration_seconds(file_path)
+                    duration_value = await probe_media_duration_seconds(file_path)
 
                 video_kwargs = {
                     'video': types.FSInputFile(file_path),
