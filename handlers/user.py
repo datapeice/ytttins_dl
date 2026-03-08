@@ -24,20 +24,24 @@ def resolve_user_identity(user: types.User) -> tuple[str, str, str]:
     handle = f"@{username}" if username else display_name
     return display_name, stored_name, handle
 
-def format_caption(metadata: dict, platform: str) -> str:
+def format_caption(metadata: dict, platform: str, original_url: str = "") -> str:
     """Generate unified caption format for all platforms."""
     uploader = metadata.get('uploader', 'Unknown')
-    url = metadata.get('webpage_url', '')
+    url = original_url or metadata.get('webpage_url', '')
     
     # Check for verified status in metadata
     is_verified = metadata.get('verified') or metadata.get('uploader_is_verified') or metadata.get('channel_is_verified')
-    verified_badge = " ✔️" if is_verified else ""
     
+    # Strip leading @
+    uploader = uploader.lstrip('@')
     # Escape HTML special characters in uploader name
     uploader = uploader.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     
+    if is_verified:
+        uploader = f"{uploader} <tg-emoji emoji-id=\"5233582409416448551\">✓</tg-emoji>"
+
     caption = (
-        f"👤 {uploader}{verified_badge} | <a href=\"{url}\">Link</a>\n"
+        f"👤 {uploader} | <a href=\"{url}\">Link</a>\n"
         f"Developed by @datapeice"
     )
     return caption
@@ -171,7 +175,7 @@ async def handle_url(message: types.Message):
             audio_files = [f for f in file_path if f.suffix.lower() in audio_exts]
             
             # Prepare unified caption
-            caption = format_caption(metadata, platform)
+            caption = format_caption(metadata, platform, message.text)
 
             media_group = []
             ordered_files = sorted(image_files + video_files, key=lambda p: p.name)
@@ -222,7 +226,7 @@ async def handle_url(message: types.Message):
             await update_status("📤 Uploading to Telegram...")
             
             # Use unified caption format
-            caption = format_caption(metadata, platform)
+            caption = format_caption(metadata, platform, message.text)
 
             image_exts = ['.jpg', '.jpeg', '.png', '.webp']
             if file_path.suffix.lower() in image_exts:
@@ -379,7 +383,7 @@ async def handle_format_selection(callback: types.CallbackQuery):
             if file_path.exists():
                 await update_status("📤 Uploading to Telegram...")
                 
-                caption = format_caption(metadata, 'youtube')
+                caption = format_caption(metadata, 'youtube', url)
 
                 if thumbnail_path:
                     await callback.message.answer_audio(
@@ -485,7 +489,7 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
             if file_path.exists():
                 await update_status("📤 Uploading to Telegram...")
                 
-                caption = format_caption(metadata, 'youtube')
+                caption = format_caption(metadata, 'youtube', url)
 
                 duration_value = int(metadata.get('duration', 0))
                 if duration_value <= 0:
