@@ -29,11 +29,15 @@ def format_caption(metadata: dict, platform: str) -> str:
     uploader = metadata.get('uploader', 'Unknown')
     url = metadata.get('webpage_url', '')
     
+    # Check for verified status in metadata
+    is_verified = metadata.get('verified') or metadata.get('uploader_is_verified') or metadata.get('channel_is_verified')
+    verified_badge = " ✔️" if is_verified else ""
+    
     # Escape HTML special characters in uploader name
     uploader = uploader.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     
     caption = (
-        f"👤 {uploader} | <a href=\"{url}\">Link</a>\n"
+        f"👤 {uploader}{verified_badge} | <a href=\"{url}\">Link</a>\n"
         f"Developed by @datapeice"
     )
     return caption

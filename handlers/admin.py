@@ -2,6 +2,7 @@ import logging
 import yt_dlp
 import asyncio
 import re
+import html
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -139,18 +140,25 @@ async def send_admin_panel(message: types.Message):
         bot = message.bot
         for user_id in weekly_stats['active_users']:
             try:
-                user = await bot.get_chat(user_id)
-                username = user.username or "No username"
-                user_list.append(f"@{username}")
+                db_username = stats.get_username_by_id(user_id)
+                if db_username:
+                    user_list.append(f"@{db_username}")
+                else:
+                    user = await bot.get_chat(user_id)
+                    if user.username:
+                        user_list.append(f"@{user.username}")
+                    else:
+                        name = user.full_name or user.first_name or f"User {user_id}"
+                        user_list.append(f"<a href='tg://user?id={user_id}'>{html.escape(name)}</a>")
             except Exception:
-                user_list.append(f"User {user_id}")
+                user_list.append(f"<a href='tg://user?id={user_id}'>User {user_id}</a>")
         
         stats_message += "Active Users List:\n"
         stats_message += "\n".join(user_list)
     else:
         stats_message += "No active users in the last 7 days."
 
-    await message.answer(stats_message, reply_markup=keyboard)
+    await message.answer(stats_message, reply_markup=keyboard, parse_mode="HTML")
 
 # Broadcast message handlers - Must be before general admin handler
 @router.callback_query(F.data == "admin:broadcast")
@@ -484,11 +492,18 @@ async def handle_admin_callback(callback: types.CallbackQuery):
                 bot = callback.message.bot
                 for user_id in weekly_stats['active_users']:
                     try:
-                        user = await bot.get_chat(user_id)
-                        username = user.username or "No username"
-                        user_list.append(f"@{username}")
+                        db_username = stats.get_username_by_id(user_id)
+                        if db_username:
+                            user_list.append(f"@{db_username}")
+                        else:
+                            user = await bot.get_chat(user_id)
+                            if user.username:
+                                user_list.append(f"@{user.username}")
+                            else:
+                                name = user.full_name or user.first_name or f"User {user_id}"
+                                user_list.append(f"<a href='tg://user?id={user_id}'>{html.escape(name)}</a>")
                     except Exception:
-                        user_list.append(f"User {user_id}")
+                        user_list.append(f"<a href='tg://user?id={user_id}'>User {user_id}</a>")
             except:
                 pass
             
@@ -498,7 +513,7 @@ async def handle_admin_callback(callback: types.CallbackQuery):
             stats_message += "No active users in the last 7 days."
 
         try:
-            await callback.message.edit_text(stats_message, reply_markup=keyboard)
+            await callback.message.edit_text(stats_message, reply_markup=keyboard, parse_mode="HTML")
         except Exception:
             pass
 

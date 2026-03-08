@@ -187,6 +187,20 @@ class Stats:
                 self.active_users[today] = set()
             self.active_users[today].add(user_id)
             self._save_data()
+
+    def get_username_by_id(self, user_id: int) -> str:
+        """Returns the username associated with standard user id, or None."""
+        if self.Session:
+            try:
+                from database.models import DownloadHistory
+                with self.Session() as session:
+                    # Get the most recent download for this user to get their current username
+                    history = session.query(DownloadHistory).filter_by(user_id=user_id).order_by(DownloadHistory.timestamp.desc()).first()
+                    if history and history.username:
+                        return history.username
+            except Exception as e:
+                logging.error(f"Error getting username by ID: {e}")
+        return None
     
     def get_weekly_stats(self):
         today = datetime.now().date()
