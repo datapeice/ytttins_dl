@@ -16,3 +16,6 @@ Pillow>=10.0.0
 curl-cffi==0.5.10
 brotli>=1.1.0
 pycryptodomex>=3.20.0
+mutagen
+websockets
+secretstorage
