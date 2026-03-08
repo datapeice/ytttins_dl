@@ -516,7 +516,7 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     'duration': info.get('duration', 0),
                     'width': info.get('width', 0),
                     'height': info.get('height', 0),
-                    'verified': info.get('uploader_is_verified') or info.get('verified') or False,
+                    'verified': info.get('creator_is_verified') or info.get('uploader_is_verified') or info.get('verified') or False,
                 }
 
                 # Находим скачанный файл
@@ -637,7 +637,7 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False) -> Tuple[Uni
         'duration': info.get('duration', 0),
         'width': info.get('width', 0),
         'height': info.get('height', 0),
-        'verified': info.get('uploader_is_verified') or info.get('verified') or False,
+        'verified': info.get('creator_is_verified') or info.get('uploader_is_verified') or info.get('verified') or False,
     }
 
     # Determine downloaded files
