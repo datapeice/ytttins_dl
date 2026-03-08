@@ -438,7 +438,7 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                 
                 ydl_opts = {
                     'outtmpl': output_template,
-                    'cookiefile': cookie_file if cookie_file.exists() else None,
+                    'cookiefile': str(cookie_file) if cookie_file.exists() and cookie_file.is_file() and cookie_file.stat().st_size > 0 else None,
                     'noplaylist': True,
                     'quiet': False,
                     'verbose': True,
@@ -592,7 +592,7 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False) -> Tuple[Uni
     
     ydl_opts_base = {
         'outtmpl': output_template,
-        'cookiefile': cookie_file if cookie_file.exists() else None,
+        'cookiefile': str(cookie_file) if cookie_file.exists() and cookie_file.is_file() and cookie_file.stat().st_size > 0 else None,
         'noplaylist': True,
         'quiet': False,
         'verbose': True,
