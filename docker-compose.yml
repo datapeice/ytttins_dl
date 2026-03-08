@@ -1,5 +1,3 @@
-version: '3.8' # Рекомендуется использовать 3.8 как наиболее стабильную для compose
-
 services:
   bot:
     build: .
@@ -13,13 +11,38 @@ services:
       - ./main.py:/app/main.py:ro,z     # Общий доступ только для чтения
       - ./.env:/app/.env:ro,z
     environment:
-      - TZ=Europe/Moscow # Удобнее поставить твой часовой пояс
+      - TZ=${TZ:-Europe/Moscow}
       - PYTHONUNBUFFERED=1
+      - TELEGRAM_API_URL=http://telegram-bot-api:8081
+      - USE_COBALT=${USE_COBALT:-true}
+      - COBALT_URL=http://cobalt-api:9000
+      - COBALT_API_KEY=${COBALT_API_KEY}
+      # Обнуляем переменные Cobalt чтобы yt-dlp их не подхватил
+      - COBALT_VIDEO_PROXY=
+      - VIDEO_PROXY=
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - WEBHOOK_HOST=${WEBHOOK_HOST}
+      - WEBHOOK_INTERNAL_HOST=http://telegram-downloader-bot:${WEBAPP_PORT:-8443}
+      - WEBAPP_PORT=${WEBAPP_PORT:-8443}
+    ports:
+      - "${WEBAPP_PORT:-8443}:${WEBAPP_PORT:-8443}"
     env_file:
-      - "${PWD}/.env"
+      - .env
     # На RHEL/CentOS иногда полезно явно указать, что контейнер должен иметь доступ к сети
     security_opt:
       - label=type:container_runtime_t 
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+    depends_on:
+      - telegram-bot-api
+      - cobalt-api
+      - postgres
     logging:
       driver: "json-file"
       options:
@@ -32,6 +55,61 @@ services:
       retries: 3
     networks:
       - bot_network
+
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api:latest
+    container_name: telegram-bot-api
+    restart: unless-stopped
+    environment:
+      # Важно: добавьте в ваш .env файл(или GitHub Secrets) переменные TELEGRAM_API_ID и TELEGRAM_API_HASH
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      - TELEGRAM_LOCAL=1
+    volumes:
+      - ./telegram-data:/var/lib/telegram-bot-api
+    networks:
+      - bot_network
+
+  cobalt-api:
+    image: ghcr.io/imputnet/cobalt:latest
+    container_name: cobalt-api
+    restart: always
+    ports:
+      - "9000:9000"
+    environment:
+      - API_NAME=${COBALT_API_NAME:-HomeWorker}
+      - API_URL=${COBALT_API_URL_PUBLIC}
+      - VIDEO_PROXY=${COBALT_VIDEO_PROXY:-true}
+      - USE_COOKIES=${COBALT_USE_COOKIES:-true}
+      - API_KEY=${COBALT_API_KEY}
+      - REQUIRE_API_KEY=${COBALT_REQUIRE_API_KEY:-true}
+    volumes:
+      - ./data/cookies.txt:/app/cookies.txt:ro
+    networks:
+      - bot_network
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: bot-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bot_network
+
+volumes:
+  postgres_data:
 
 networks:
   bot_network:

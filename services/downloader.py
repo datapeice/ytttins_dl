@@ -516,6 +516,7 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     'duration': info.get('duration', 0),
                     'width': info.get('width', 0),
                     'height': info.get('height', 0),
+                    'verified': info.get('uploader_is_verified') or info.get('verified') or False,
                 }
 
                 # Находим скачанный файл
@@ -593,11 +594,18 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False) -> Tuple[Uni
         'outtmpl': output_template,
         'cookiefile': cookie_file if cookie_file.exists() else None,
         'noplaylist': True,
-        'quiet': False, # Enable logging to see what's wrong
+        'quiet': False,
         'verbose': True,
-        # Note: impersonate disabled for TikTok as it causes crashes
-        # Remove hardcoded User-Agent to avoid conflicts with cookies or triggering anti-bot
-        # 'http_headers': { ... } 
+        'http_headers': {
+            'User-Agent': random.choice(USER_AGENTS),
+        },
+        'extractor_args': {
+            'tiktok': {
+                'app_name': ['tiktok_web'],
+                'app_version': [''],
+            }
+        },
+        # Не указываем target явно — yt-dlp сам выберет доступный на ARM64
     }
     
     # Добавляем прокси, если запрошено и настроено
@@ -629,6 +637,7 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False) -> Tuple[Uni
         'duration': info.get('duration', 0),
         'width': info.get('width', 0),
         'height': info.get('height', 0),
+        'verified': info.get('uploader_is_verified') or info.get('verified') or False,
     }
 
     # Determine downloaded files

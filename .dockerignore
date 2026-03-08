@@ -1,0 +1,14 @@
+.env
+.env.example
+.git
+.github
+__pycache__
+*.pyc
+*.pyo
+downloads/*
+logs/*
+data/cookies.txt
+telegram-data
+venv
+.venv
+*.md

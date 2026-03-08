@@ -132,12 +132,12 @@ class CobaltClient:
             elif status == "redirect":
                 # Прямая ссылка на файл
                 file_url = response.get("url")
-                return await self._download_file(file_url, response, progress_callback)
+                return await self._download_file(file_url, response, progress_callback, original_url=url)
             
             elif status == "tunnel":
                 # Cobalt проксирует файл через /tunnel
                 tunnel_url = response.get("url")
-                return await self._download_file(tunnel_url, response, progress_callback)
+                return await self._download_file(tunnel_url, response, progress_callback, original_url=url)
             
             elif status == "picker":
                 # Множественные файлы (например, TikTok слайдшоу)
@@ -159,7 +159,8 @@ class CobaltClient:
         self, 
         file_url: str, 
         metadata: Dict,
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable] = None,
+        original_url: str = ""
     ) -> Tuple[Path, Optional[Path], Dict]:
         """
         Скачивает файл по URL (redirect или tunnel) с поддержкой прогресса.
@@ -205,18 +206,46 @@ class CobaltClient:
             logging.info(f"File downloaded: {file_path} ({file_path.stat().st_size} bytes)")
             
             # Формируем метаданные
-            uploader = metadata.get("author") or metadata.get("uploader") or metadata.get("creator") or "Unknown"
+            uploader = metadata.get("author") or metadata.get("uploader") or metadata.get("creator") or ""
+            # Если автор неизвестен — пробуем достать из URL (tiktok.com/@username/...)
+            if not uploader and original_url:
+                import re
+                m = re.search(r'tiktok\.com/@([^/?\s]+)', original_url)
+                if m:
+                    uploader = m.group(1)  # без @, его добавит смайлик в подписи
+            uploader = uploader or "Unknown"
             title = metadata.get("title") or filename.rsplit('.', 1)[0]
             result_metadata = {
                 "title": title,
                 "uploader": uploader,
-                "webpage_url": metadata.get("url", ""),
+                "webpage_url": original_url or metadata.get("url", ""),
                 "duration": 0,
                 "width": 0,
                 "height": 0,
+                "verified": False,
                 "codec": "h264"  # Cobalt отдает H.264
             }
-            
+
+            # Обогащаем метаданные через tikwm для TikTok
+            if original_url and 'tiktok.com' in original_url:
+                from services.tiktok_scraper import fetch_tiktok_metadata
+                import asyncio
+                try:
+                    tikwm = await asyncio.to_thread(fetch_tiktok_metadata, original_url)
+                    if tikwm:
+                        if tikwm.get('uploader'):
+                            result_metadata['uploader'] = tikwm['uploader']
+                        result_metadata['verified'] = tikwm.get('verified', False)
+                        if tikwm.get('title'):
+                            result_metadata['title'] = tikwm['title']
+                        if tikwm.get('duration'):
+                            result_metadata['duration'] = tikwm['duration']
+                        logging.info(f"tikwm enriched: uploader={result_metadata['uploader']!r} verified={result_metadata['verified']}")
+                    else:
+                        logging.warning("tikwm returned empty metadata")
+                except Exception as e:
+                    logging.warning(f"tikwm enrichment failed: {e}")
+
             return file_path, None, result_metadata
         
         except Exception as e:

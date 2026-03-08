@@ -10,6 +10,57 @@ DEFAULT_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
+def fetch_tiktok_metadata(url: str) -> Dict:
+    """
+    Получает метаданные TikTok видео через tikwm API без скачивания файла.
+    Возвращает dict с uploader, verified, title, duration.
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json, text/plain, */*',
+    }
+    try:
+        response = requests.get(
+            'https://www.tikwm.com/api/',
+            params={'url': url, 'hd': 0},
+            headers=headers,
+            timeout=10
+        )
+        data = response.json()
+        if data.get('code') != 0:
+            return {}
+        result = data.get('data', {})
+        author = result.get('author', {})
+        unique_id = author.get('unique_id') or author.get('nickname') or ''
+
+        # tikwm video API doesn't include verified — fetch from user info endpoint
+        verified = False
+        if unique_id:
+            try:
+                user_resp = requests.get(
+                    'https://www.tikwm.com/api/user/info',
+                    params={'unique_id': unique_id},
+                    headers=headers,
+                    timeout=10
+                )
+                user_data = user_resp.json()
+                if user_data.get('code') == 0:
+                    verified = bool(user_data.get('data', {}).get('user', {}).get('verified', False))
+            except Exception as e:
+                logging.warning(f"tikwm user info fetch failed: {e}")
+
+        meta = {
+            'uploader': unique_id,
+            'verified': verified,
+            'title': result.get('title', ''),
+            'duration': result.get('duration', 0),
+        }
+        logging.info(f"tikwm meta: uploader={meta['uploader']!r} verified={verified}")
+        return meta
+    except Exception as e:
+        logging.warning(f"tikwm metadata fetch failed: {e}")
+        return {}
+
 def download_tiktok_images(link: str, output_dir: Path) -> Tuple[List[Path], Dict]:
     """
     Downloads TikTok slideshow images and audio using tikwm.com API.

@@ -10,10 +10,11 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 COOKIES_CONTENT = os.getenv("COOKIES_CONTENT")
 WHITELISTED_ENV = os.getenv("WHITELISTED", "")
 HOME_SERVER_ADDRESS = os.getenv("HOME_SERVER_ADDRESS", "localhost:50057")
+TELEGRAM_API_URL = os.getenv("TELEGRAM_API_URL", "https://api.telegram.org")
 
 # Cobalt API Configuration
 USE_COBALT = os.getenv("USE_COBALT", "false").lower() == "true"
-COBALT_API_URL = os.getenv("COBALT_API_URL", "")
+COBALT_API_URL = os.getenv("COBALT_URL") or os.getenv("COBALT_API_URL", "")
 COBALT_API_KEY = os.getenv("COBALT_API_KEY", "")
 HTTP_PROXY = os.getenv("HTTP_PROXY", "")
 HTTPS_PROXY = os.getenv("HTTPS_PROXY", "")

@@ -288,6 +288,15 @@ async def handle_url(message: types.Message):
     except Exception as e:
         error_msg = str(e)
         logging.error(f"Error: {error_msg}")
+        try:
+            if "file_path" in locals() and file_path:
+                if isinstance(file_path, list):
+                    for p in file_path:
+                        if p.exists(): p.unlink()
+                elif file_path.exists(): file_path.unlink()
+            if "thumbnail_path" in locals() and thumbnail_path and thumbnail_path.exists(): thumbnail_path.unlink()
+        except Exception:
+            pass
         
         # User-friendly error messages
         if "Unsupported URL" in error_msg:
@@ -394,6 +403,15 @@ async def handle_format_selection(callback: types.CallbackQuery):
         except Exception as e:
             error_msg = str(e)
             logging.error(f"Error: {error_msg}")
+            try:
+                if "file_path" in locals() and file_path:
+                    if isinstance(file_path, list):
+                        for p in file_path:
+                            if p.exists(): p.unlink()
+                    elif file_path.exists(): file_path.unlink()
+                if "thumbnail_path" in locals() and thumbnail_path and thumbnail_path.exists(): thumbnail_path.unlink()
+            except Exception:
+                pass
             
             if "No working app info" in error_msg or "tiktok:sound" in error_msg:
                 user_error = "❌ TikTok sound/music links are not supported. Please send a video link."
