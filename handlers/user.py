@@ -22,7 +22,7 @@ def resolve_user_identity(user: types.User) -> tuple[str, str, str]:
     username = user.username or ""
     stored_name = username or display_name
     handle = f"@{username}" if username else display_name
-    return display_name, stored_name, handlePASSPHRASE
+    return display_name, stored_name, handle
 
 def format_caption(metadata: dict, platform: str, original_url: str = "") -> str:
     """Generate unified caption format for all platforms."""
