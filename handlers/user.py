@@ -102,6 +102,17 @@ async def handle_url(message: types.Message):
     if not re.search(url_pattern, message.text):
         await message.answer("Please send a valid URL.")
         return
+    
+    # Validate Pornhub URLs - must have viewkey parameter
+    if "pornhub.com" in message.text.lower():
+        if "viewkey=" not in message.text:
+            await message.answer(
+                "❌ Invalid Pornhub URL!\n\n"
+                "The URL must contain a video ID (viewkey parameter).\n"
+                "Example: https://www.pornhub.com/view_video.php?viewkey=xxxxx\n\n"
+                "Please copy the full URL from the video page."
+            )
+            return
 
     # Whitelist check
     if stats.whitelisted_users and not stats.is_whitelisted(message.from_user.username):

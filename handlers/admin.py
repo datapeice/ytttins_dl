@@ -518,12 +518,7 @@ async def handle_admin_callback(callback: types.CallbackQuery):
             pass
 
     elif action == "stats":
-        # Просто вызываем ту же логику, что и back
-        await handle_admin_callback(callback) # Нужно поменять action на back, но тут рекурсия. 
-        # Проще оставить как есть или скопировать логику.
-        # В предыдущем примере было просто pass, если мы не хотим менять сообщение. 
-        # Но по кнопке stats обычно ожидают рефреш. 
-        # Так как код выше для 'back' полный, его достаточно.
+        # Stats button - do nothing, already showing stats
         pass
 
     elif action == "get_logs":
@@ -555,11 +550,10 @@ async def handle_document(message: types.Message):
         try:
             file_id = message.document.file_id
             bot = message.bot
-            file = await bot.get_file(file_id)
-            file_path = file.file_path
             
             destination = DATA_DIR / "cookies.txt.tmp"
-            await bot.download_file(file_path, destination)
+            # Use download() instead of get_file() + download_file() to handle local API properly
+            await bot.download(file=file_id, destination=destination)
             
             builder = InlineKeyboardBuilder()
             builder.add(

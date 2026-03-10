@@ -8,8 +8,8 @@ services:
       - ./downloads:/app/downloads:rw,Z # Эксклюзивный доступ для записи
       - ./logs:/app/logs:rw,Z           # Эксклюзивный доступ для записи
       - ./data:/app/data:rw,Z           # Эксклюзивный доступ для записи
-      - ./main.py:/app/main.py:ro,z     # Общий доступ только для чтения
-      - ./.env:/app/.env:ro,z
+      - ./main.py:/app/main.py:ro,Z     # Общий доступ только для чтения
+      - ./.env:/app/.env:ro,Z
     environment:
       - TZ=${TZ:-Europe/Moscow}
       - PYTHONUNBUFFERED=1
@@ -24,6 +24,14 @@ services:
       - WEBHOOK_HOST=${WEBHOOK_HOST}
       - WEBHOOK_INTERNAL_HOST=http://telegram-downloader-bot:${WEBAPP_PORT:-8443}
       - WEBAPP_PORT=${WEBAPP_PORT:-8443}
+      # Chrome and PhantomJS paths for yt-dlp browser impersonation
+      - CHROME_BIN=/usr/bin/google-chrome-stable
+      # Disable Chrome sandbox for Docker (required)
+      - CHROME_FLAGS=--no-sandbox --disable-dev-shm-usage --disable-gpu
+      # Enable curl-cffi for TLS fingerprinting
+      - CURL_IMPERSONATE=chrome120
+      # Disable PhantomJS (broken with OpenSSL 3.x) - use Node.js instead
+      - YTDLP_NO_PHANTOM=1
     ports:
       - "${WEBAPP_PORT:-8443}:${WEBAPP_PORT:-8443}"
     env_file:
@@ -40,9 +48,12 @@ services:
           cpus: '0.25'
           memory: 512M
     depends_on:
-      - telegram-bot-api
-      - cobalt-api
-      - postgres
+      telegram-bot-api:
+        condition: service_started
+      cobalt-api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -66,7 +77,7 @@ services:
       - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
       - TELEGRAM_LOCAL=1
     volumes:
-      - ./telegram-data:/var/lib/telegram-bot-api
+      - ./telegram-data:/var/lib/telegram-bot-api:Z
     networks:
       - bot_network
 
@@ -84,7 +95,7 @@ services:
       - API_KEY=${COBALT_API_KEY}
       - REQUIRE_API_KEY=${COBALT_REQUIRE_API_KEY:-true}
     volumes:
-      - ./data/cookies.txt:/app/cookies.txt:ro
+      - ./data/cookies.txt:/app/cookies.txt:ro,Z
     networks:
       - bot_network
 
@@ -97,7 +108,7 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data:Z
     ports:
       - "5432:5432"
     healthcheck:

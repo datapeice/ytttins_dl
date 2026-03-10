@@ -28,14 +28,18 @@ USER_AGENTS = [
 ]
 
 # TLS fingerprints для curl-cffi (имитация браузеров)
-# Безопасные targets, которые работают на большинстве систем
+# Список реально доступных targets в curl_cffi 0.5.10 (формат из --list-impersonate-targets)
 IMPERSONATE_TARGETS = [
-    'chrome120',
-    'chrome110',
-    'chrome99',
-    'edge101',
-    'safari15_5',
-    'safari15_3',
+    'Chrome-110',     # Chrome 110 - максимальная доступная версия
+    'Chrome-107',     # Chrome 107
+    'Chrome-104',     # Chrome 104
+    'Chrome-101',     # Chrome 101
+    'Chrome-100',     # Chrome 100
+    'Chrome-99',      # Chrome 99
+    'Edge-101',       # Edge 101
+    'Edge-99',        # Edge 99
+    'Safari-15.5',    # Safari 15.5 (macOS 12)
+    'Safari-15.3',    # Safari 15.3 (macOS 11)
 ]
 
 try:
@@ -162,6 +166,8 @@ def get_platform(url: str) -> str:
         return "vk"
     elif "dailymotion.com" in url_lower or "dai.ly" in url_lower:
         return "dailymotion"
+    elif "pornhub.com" in url_lower:
+        return "pornhub"
     elif "https://" in url_lower or "http://" in url_lower:
         # yt-dlp supports 1800+ sites, try anyway
         return "video"
@@ -275,7 +281,8 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     platform = get_platform(url)
 
     # Strip query parameters (they often confuse extractors or contain tracking)
-    if '?' in url and platform not in ("youtube", "instagram"):
+    # Exclude platforms that need query params: youtube, instagram, pornhub (viewkey)
+    if '?' in url and platform not in ("youtube", "instagram", "pornhub"):
         url = url.split('?')[0]
     
     # Показываем смешной статус сразу
@@ -443,7 +450,36 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     'quiet': False,
                     'verbose': True,
                     'legacy_server_connect': True,  # GitHub: helps with old TLS configs & Cloudflare
+                    'socket_timeout': 30,  # Prevent hanging on slow/blocked connections
+                    'retries': 3,  # Retry failed fragments
+                    'fragment_retries': 3,  # Retry failed fragments
+                    'playlist_items': '1',  # Only download first item if URL is a playlist
+                    'noplaylist': True,  # Skip playlists
+                    'exec_before_download': [],  # Prevent PhantomJS usage
+                    'extractor_args': {
+                        'pornhub': {
+                            'no_js': True  # Try without JS first
+                        }
+                    }
                 }
+                
+                # Расширенные HTTP-заголовки для имитации браузера
+                browser_headers = {
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
+                    'Cache-Control': 'max-age=0',
+                    'Sec-Ch-Ua': '"Chromium";v="120", "Google Chrome";v="120", "Not_A Brand";v="24"',
+                    'Sec-Ch-Ua-Mobile': '?0',
+                    'Sec-Ch-Ua-Platform': '"Windows"',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                    'Upgrade-Insecure-Requests': '1',
+                    'User-Agent': user_agent,
+                }
+                ydl_opts['http_headers'] = browser_headers
                 
                 # Имитация TLS-отпечатка браузера через curl-cffi (если поддерживается)
                 if use_impersonate:
@@ -456,7 +492,7 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                             use_impersonate = False
                         else:
                             ydl_opts['impersonate'] = target_obj
-                            logging.info(f"🔒 Attempting TLS impersonation: {impersonate_target}")
+                            logging.info(f"🔒 Attempting TLS impersonation: {impersonate_target} + User-Agent: {user_agent[:50]}...")
                     except Exception as imp_err:
                         logging.error(f"❌ Failed to set impersonate={impersonate_target}: {imp_err}")
                         # Don't retry with impersonate if setting fails
