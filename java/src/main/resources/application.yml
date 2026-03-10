@@ -1,0 +1,70 @@
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  ytttins-dl  –  Spring Boot application configuration        ║
+# ║  All values can be overridden via environment variables       ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+server:
+  port: ${WEBAPP_PORT:8443}
+
+# ─── Bot ─────────────────────────────────────────────────────────────────────
+bot:
+  token: ${BOT_TOKEN:}
+  admin-username: ${ADMIN_USERNAME:}
+
+  # Webhook (leave blank to use long-polling mode)
+  webhook-host: ${WEBHOOK_HOST:}
+  webhook-internal-host: ${WEBHOOK_INTERNAL_HOST:}
+
+  # Comma-separated initial whitelist (ENV: WHITELISTED=user1;user2)
+  whitelisted: ${WHITELISTED:}
+
+  # Raw Netscape cookies.txt content (ENV: COOKIES_CONTENT)
+  cookies-content: ${COOKIES_CONTENT:}
+
+# ─── Telegram API ─────────────────────────────────────────────────────────────
+telegram:
+  api-url: ${TELEGRAM_API_URL:https://api.telegram.org}
+
+# ─── Cobalt API (fallback downloader) ─────────────────────────────────────────
+cobalt:
+  enabled: ${USE_COBALT:false}
+  api-url: ${COBALT_API_URL_PUBLIC:}
+  api-key: ${COBALT_API_KEY:}
+
+# ─── Proxy ────────────────────────────────────────────────────────────────────
+proxy:
+  socks: ${SOCKS_PROXY:}
+  http: ${HTTP_PROXY:}
+
+# ─── Database ─────────────────────────────────────────────────────────────────
+spring:
+  datasource:
+    url: ${DATABASE_URL:jdbc:h2:file:./data/botdb;AUTO_SERVER=TRUE}
+    username: ${POSTGRES_USER:sa}
+    password: ${POSTGRES_PASSWORD:}
+    driver-class-name: ${DB_DRIVER:org.h2.Driver}
+
+  jpa:
+    hibernate:
+      ddl-auto: update           # create tables automatically; use 'validate' in strict prod
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: ${DB_DIALECT:org.hibernate.dialect.H2Dialect}
+
+  # H2 web console — DEVELOPMENT ONLY. Must remain false in production.
+  # Exposing this in production would allow unauthenticated DB access.
+  h2:
+    console:
+      enabled: ${H2_CONSOLE_ENABLED:false}
+      path: /h2-console
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+logging:
+  file:
+    name: logs/bot.log
+  level:
+    root: INFO
+    me.datapeice.ytttins: DEBUG
+    org.telegram: WARN
+    org.springframework: WARN

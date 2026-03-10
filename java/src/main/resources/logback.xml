@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- ── Console appender ───────────────────────────────────────────── -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- ── bot.log — general operations ──────────────────────────────── -->
+    <appender name="BOT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/bot.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <!-- Keep 30 days of logs -->
+            <fileNamePattern>logs/bot.%d{yyyy-MM-dd}.log</fileNamePattern>
+            <maxHistory>30</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss} - %level - %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- ── downloads.log — per-download audit trail ───────────────────── -->
+    <!-- Format mirrors Python:
+         "User: John (@john, ID: 123) | Platform: youtube | Type: Music | URL: ..." -->
+    <appender name="DOWNLOADS_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/downloads.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>logs/downloads.%d{yyyy-MM-dd}.log</fileNamePattern>
+            <maxHistory>90</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- ── Logger: download audit ─────────────────────────────────────── -->
+    <!-- UserHandler logs to this logger for the downloads.log file -->
+    <logger name="downloads" level="INFO" additivity="false">
+        <appender-ref ref="DOWNLOADS_FILE"/>
+    </logger>
+
+    <!-- ── Root logger ────────────────────────────────────────────────── -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="BOT_FILE"/>
+    </root>
+
+    <!-- Quiet noisy libraries -->
+    <logger name="org.telegram" level="WARN"/>
+    <logger name="org.springframework" level="WARN"/>
+    <logger name="org.hibernate" level="WARN"/>
+    <logger name="okhttp3" level="WARN"/>
+
+    <!-- Verbose application logging -->
+    <logger name="me.datapeice.ytttins" level="DEBUG"/>
+
+</configuration>
