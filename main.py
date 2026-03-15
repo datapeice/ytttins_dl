@@ -21,6 +21,13 @@ WEBAPP_HOST = "0.0.0.0"
 WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", 8443))
 
 async def on_startup(bot: Bot):
+    from services.cookie_utils import convert_netscape_to_json
+    from config import DATA_DIR
+    
+    cookies_txt = DATA_DIR / "cookies.txt"
+    cookies_json = DATA_DIR / "cookies.json"
+    convert_netscape_to_json(cookies_txt, cookies_json)
+
     asyncio.create_task(delete_old_files())
     is_local_api = "telegram-bot-api" in os.getenv("TELEGRAM_API_URL", "")
 

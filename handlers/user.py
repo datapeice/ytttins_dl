@@ -38,7 +38,8 @@ def format_caption(metadata: dict, platform: str, original_url: str = "") -> str
     uploader = uploader.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     
     if is_verified:
-        uploader = f"{uploader} <tg-emoji emoji-id=\"5233582409416448551\">✓</tg-emoji>"
+        # Use a combination of a visible emoji and custom tg-emoji if supported
+        uploader = f"{uploader} <tg-emoji emoji-id=\"5233582409416448551\">✅</tg-emoji>"
 
     caption = (
         f"👤 {uploader} | <a href=\"{url}\">Link</a>\n"
@@ -281,9 +282,9 @@ async def handle_url(message: types.Message):
                     'parse_mode': 'HTML'
                 }
                 
-                # if metadata.get('width') and metadata.get('height'):
-                #     video_kwargs['width'] = metadata.get('width')
-                #     video_kwargs['height'] = metadata.get('height')
+                if metadata.get('width') and metadata.get('height'):
+                    video_kwargs['width'] = metadata.get('width')
+                    video_kwargs['height'] = metadata.get('height')
                 
                 if thumbnail_path:
                    video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
@@ -514,9 +515,9 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
                     'parse_mode': 'HTML'
                 }
                 
-                # if metadata.get('width') and metadata.get('height'):
-                #     video_kwargs['width'] = metadata.get('width')
-                #     video_kwargs['height'] = metadata.get('height')
+                if metadata.get('width') and metadata.get('height'):
+                    video_kwargs['width'] = metadata.get('width')
+                    video_kwargs['height'] = metadata.get('height')
                 
                 if thumbnail_path:
                    video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)

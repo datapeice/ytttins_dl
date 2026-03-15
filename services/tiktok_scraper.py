@@ -196,13 +196,23 @@ def download_tikwm(link: str, output_dir: Path) -> Tuple[List[Path], Dict]:
             logging.info(f"Audio downloaded successfully from tikwm")
         except Exception as e:
             logging.warning(f"Failed to download audio from tikwm: {e}")
-    
+
+    # Enrich metadata with verification status (requires extra API call)
+    verified = False
+    try:
+        from services.tiktok_scraper import fetch_tiktok_metadata
+        temp_meta = fetch_tiktok_metadata(link)
+        verified = temp_meta.get('verified', False)
+    except Exception as e:
+        logging.warning(f"Failed to fetch verification status in download_tikwm: {e}")
+
     metadata = {
         'title': title,
         'uploader': author,
         'webpage_url': link,
         'duration': result.get('duration', 0),
-        'has_audio': audio_url is not None
+        'has_audio': audio_url is not None,
+        'verified': verified
     }
     
     return files, metadata

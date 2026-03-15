@@ -7,18 +7,19 @@ import random
 import aiohttp
 import requests
 import concurrent.futures
+import subprocess
 from pathlib import Path
 from typing import Tuple, Dict, Optional, Callable, Union, List
 
 from config import DOWNLOADS_DIR, DATA_DIR, COOKIES_CONTENT, USE_COBALT, COBALT_API_URL, SOCKS_PROXY
 from database.storage import stats
 from database.models import Cookie
-from services.tiktok_scraper import download_tiktok_images
+from services.tiktok_scraper import download_tiktok_images, fetch_tiktok_metadata
 
-IS_HEROKU = bool(os.getenv("DYNO"))
-
-# User-agents для обхода блокировок
 USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
@@ -27,19 +28,61 @@ USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0',
 ]
 
+def generate_video_thumbnail(video_path: Path, output_path: Path) -> bool:
+    """Generate a high-quality thumbnail from video using ffmpeg."""
+    try:
+        logging.info(f"Generating thumbnail for {video_path.name}")
+        # Take a frame from 1 second in to avoid black start
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", "00:00:01",
+            "-i", str(video_path),
+            "-vframes", "1",
+            "-vf", "scale=w=320:h=320:force_original_aspect_ratio=decrease",
+            "-q:v", "2",
+            str(output_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            logging.warning(f"ffmpeg thumbnail generation failed: {result.stderr}")
+            return False
+        return True
+    except Exception as e:
+        logging.error(f"Error generating thumbnail: {e}")
+        return False
+
+def probe_video_dimensions(video_path: Path) -> Tuple[int, int]:
+    """Probe video dimensions using ffprobe."""
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "csv=s=x:p=0",
+            str(video_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            dims = result.stdout.strip().split('x')
+            if len(dims) == 2:
+                return int(dims[0]), int(dims[1])
+    except Exception:
+        pass
+    return 0, 0
+
 # TLS fingerprints для curl-cffi (имитация браузеров)
 # Список реально доступных targets в curl_cffi 0.5.10 (формат из --list-impersonate-targets)
 IMPERSONATE_TARGETS = [
-    'Chrome-110',     # Chrome 110 - максимальная доступная версия
-    'Chrome-107',     # Chrome 107
-    'Chrome-104',     # Chrome 104
-    'Chrome-101',     # Chrome 101
-    'Chrome-100',     # Chrome 100
-    'Chrome-99',      # Chrome 99
-    'Edge-101',       # Edge 101
-    'Edge-99',        # Edge 99
-    'Safari-15.5',    # Safari 15.5 (macOS 12)
-    'Safari-15.3',    # Safari 15.3 (macOS 11)
+    'chrome-110',      # Chrome 110
+    'chrome-107',      # Chrome 107
+    'chrome-104',      # Chrome 104
+    'chrome-101',      # Chrome 101
+    'chrome-100',      # Chrome 100
+    'chrome-99',       # Chrome 99
+    'edge-101',        # Edge 101
+    'edge-99',         # Edge 99
+    'safari-15.5',     # Safari 15.5
+    'safari-15.3',     # Safari 15.3
 ]
 
 try:
@@ -340,7 +383,56 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         
         # TikTok через специальный метод
         if platform == "tiktok":
-            return await _download_local_tiktok(url)
+            # Always use tiktok_local first, and then enrich
+            res = await _download_local_tiktok(url)
+            # Enrich metadata with verification for TikTok ALWAYS
+            if res and len(res) == 3:
+                files, thumb, meta = res
+                
+                # Post-process for thumbnails and dimensions if needed
+                if isinstance(files, Path) and files.exists():
+                    video_file = files
+                    # Always generate thumbnail if missing
+                    if not thumb or not thumb.exists():
+                        new_thumb = DOWNLOADS_DIR / f"{video_file.stem}_thumb.jpg"
+                        if generate_video_thumbnail(video_file, new_thumb):
+                            thumb = new_thumb
+                            res = (video_file, thumb, meta)
+                    
+                    # Ensure dimensions are present
+                    if not meta.get('width') or not meta.get('height'):
+                        w, h = probe_video_dimensions(video_file)
+                        if w > 0:
+                            meta['width'] = w
+                            meta['height'] = h
+
+                if not meta.get('verified'):
+                    try:
+                        if platform == "tiktok":
+                            from services.tiktok_scraper import fetch_tiktok_metadata
+                            enrich_meta = await asyncio.to_thread(fetch_tiktok_metadata, url)
+                            if enrich_meta.get('verified'):
+                                meta['verified'] = True
+                                logging.info(f"✅ Verified status enriched for {url}")
+                        elif platform == "instagram":
+                            # Use a separate probe for Instagram verification
+                            ydl_opts_probe = {
+                                'proxy': '',
+                                'quiet': True,
+                                'no_warnings': True,
+                                'cookiefile': str(DATA_DIR / "cookies.txt"),
+                            }
+                            with yt_dlp.YoutubeDL(ydl_opts_probe) as ydl:
+                                info = ydl.extract_info(url, download=False)
+                                meta['verified'] = info.get('uploader_is_verified') or False
+                                if info.get('uploader') and (not meta.get('uploader') or meta.get('uploader') == 'Unknown'):
+                                    meta['uploader'] = info['uploader']
+                                    logging.info(f"✅ Instagram uploader enriched: {meta['uploader']}")
+                            if meta.get('verified'):
+                                logging.info(f"✅ Instagram Verified status enriched for {url}")
+                    except Exception as e:
+                        logging.warning(f"Failed to enrich verification for {platform}: {e}")
+            return res
         
         # YouTube/Instagram/музыка через универсальный метод
         return await _download_local_ytdlp(url, is_music, video_height=video_height)
@@ -385,7 +477,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             
         except Exception as proxy_error:
             logging.warning(f"[YT-DLP+PROXY] ❌ Failed: {proxy_error}")
-            pass  # Silent fallback to Cobalt
+            # Silent fallback to method 2 (Cobalt)
     
     # === МЕТОД 2: COBALT API (fallback) ===
     if cobalt_client:
@@ -460,7 +552,11 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                         'pornhub': {
                             'no_js': True  # Try without JS first
                         }
-                    }
+                    },
+                    'js_runtimes': {
+                        'node': {'path': '/usr/local/bin/node'}
+                    },
+                    'remote_components': ['ejs:github']
                 }
                 
                 # Расширенные HTTP-заголовки для имитации браузера
@@ -515,9 +611,12 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                         }
                     }
                 
-                # Добавляем прокси, если запрошено и настроено
+                # Добавляем или ПРИНУДИТЕЛЬНО ОТКЛЮЧАЕМ прокси
                 if use_proxy and SOCKS_PROXY:
                     ydl_opts['proxy'] = SOCKS_PROXY
+                else:
+                    # Принудительно отключаем прокси (пустая строка перебивает ENV переменные)
+                    ydl_opts['proxy'] = ''
                 
                 if is_music:
                     # Только аудио
@@ -572,13 +671,25 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                 file_path = _select_best_downloaded_file(downloaded_files)
                 _cleanup_extra_files(downloaded_files, file_path)
                 logging.info(f"Downloaded: {file_path.name}")
+                
+                # Generate thumbnail if missing and mandatory probe for dimensions
+                final_thumbnail = None
+                if not is_music:
+                    if not metadata.get('width') or not metadata.get('height'):
+                        w, h = probe_video_dimensions(file_path)
+                        metadata['width'] = w
+                        metadata['height'] = h
+                    
+                    thumbnail_path = DOWNLOADS_DIR / f"{file_path.stem}_thumb.jpg"
+                    if generate_video_thumbnail(file_path, thumbnail_path):
+                        final_thumbnail = thumbnail_path
 
                 if use_impersonate and attempt > 1:
                     logging.info(f"✅ Success with user-agent {attempt}/{len(USER_AGENTS)} + impersonate={impersonate_target}")
                 elif not use_impersonate:
                     logging.info(f"✅ Success without impersonate (attempt {attempt}/{len(USER_AGENTS)})")
 
-                return file_path, None, metadata
+                return file_path, final_thumbnail, metadata
                     
             except Exception as e:
                 error_str = str(e)
@@ -644,9 +755,12 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False) -> Tuple[Uni
         # Не указываем target явно — yt-dlp сам выберет доступный на ARM64
     }
     
-    # Добавляем прокси, если запрошено и настроено
+    # Добавляем или ПРИНУДИТЕЛЬНО ОТКЛЮЧАЕМ прокси
     if use_proxy and SOCKS_PROXY:
         ydl_opts_base['proxy'] = SOCKS_PROXY
+    else:
+        # Принудительно отключаем прокси (пустая строка перебивает ENV переменные)
+        ydl_opts_base['proxy'] = ''
     
     if is_slideshow:
         # Try custom scraper first for photos (as yt-dlp might fail or be slow)
@@ -789,11 +903,23 @@ async def _download_tiktok_tikwm(url: str) -> Tuple[Path, Optional[Path], Dict]:
     # Не проверяем кодек - принимаем любой формат (H264 или HEVC)
     # Если Telegram не поддержит HEVC, пользователь увидит ошибку и попробует снова
     
+    # Enrich metadata with verification status (requires extra API call)
+    verified = False
+    try:
+        temp_meta = await asyncio.to_thread(fetch_tiktok_metadata, url)
+        verified = temp_meta.get('verified', False)
+        # Use uploader from fetch_tiktok_metadata if tikwm main API missed it
+        if (not author or author == 'Unknown') and temp_meta.get('uploader'):
+            author = temp_meta['uploader']
+    except Exception as e:
+        logging.warning(f"Failed to fetch verification status in _download_tiktok_tikwm: {e}")
+
     metadata = {
         'title': title,
         'uploader': author,
         'webpage_url': url,
         'duration': duration,
+        'verified': verified,
         'ext': 'mp4'
     }
     

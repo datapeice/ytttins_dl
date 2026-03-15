@@ -19,3 +19,4 @@ pycryptodomex>=3.20.0
 mutagen
 websockets
 secretstorage
+yt-dlp-ejs

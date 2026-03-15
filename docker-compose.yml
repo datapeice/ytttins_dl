@@ -8,7 +8,10 @@ services:
       - ./downloads:/app/downloads:rw,Z # Эксклюзивный доступ для записи
       - ./logs:/app/logs:rw,Z           # Эксклюзивный доступ для записи
       - ./data:/app/data:rw,Z           # Эксклюзивный доступ для записи
+      - ./telegram-data:/var/lib/telegram-bot-api:rw,Z
       - ./main.py:/app/main.py:ro,Z     # Общий доступ только для чтения
+      - ./services:/app/services:ro,Z
+      - ./handlers:/app/handlers:ro,Z
       - ./.env:/app/.env:ro,Z
     environment:
       - TZ=${TZ:-Europe/Moscow}
@@ -29,7 +32,7 @@ services:
       # Disable Chrome sandbox for Docker (required)
       - CHROME_FLAGS=--no-sandbox --disable-dev-shm-usage --disable-gpu
       # Enable curl-cffi for TLS fingerprinting
-      - CURL_IMPERSONATE=chrome120
+      - CURL_IMPERSONATE=chrome110
       # Disable PhantomJS (broken with OpenSSL 3.x) - use Node.js instead
       - YTDLP_NO_PHANTOM=1
     ports:
@@ -39,14 +42,6 @@ services:
     # На RHEL/CentOS иногда полезно явно указать, что контейнер должен иметь доступ к сети
     security_opt:
       - label=type:container_runtime_t 
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 2G
-        reservations:
-          cpus: '0.25'
-          memory: 512M
     depends_on:
       telegram-bot-api:
         condition: service_started
@@ -96,6 +91,7 @@ services:
       - REQUIRE_API_KEY=${COBALT_REQUIRE_API_KEY:-true}
     volumes:
       - ./data/cookies.txt:/app/cookies.txt:ro,Z
+      - ./data/cookies.json:/app/cookies.json:ro,Z
     networks:
       - bot_network
 
