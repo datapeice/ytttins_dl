@@ -41,7 +41,9 @@ async def on_startup(bot: Bot):
         logging.warning("⚠️ WEBHOOK_HOST not set, skipping webhook registration (polling mode)")
         return
 
-    await bot.set_webhook(url=webhook_url)
+    allowed = bot.dispatcher.resolve_used_update_types() if hasattr(bot, 'dispatcher') else None
+    if not allowed and 'dp' in globals(): allowed = dp.resolve_used_update_types()
+    await bot.set_webhook(url=webhook_url, allowed_updates=["message", "inline_query", "chosen_inline_result", "callback_query"])
     logging.info(f"Webhook set to {webhook_url}")
 
 async def on_shutdown(bot: Bot):
