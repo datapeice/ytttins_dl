@@ -354,27 +354,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         except Exception as cobalt_error:
             logging.error(f"[COBALT] ❌ Error (Heroku-first): {cobalt_error}")
 
-    # Prefer Cobalt for Instagram photos when available
-    if platform == "instagram" and cobalt_client and not is_music:
-        try:
-            logging.info(f"[COBALT] Instagram-first attempt: {url}")
-            file_path, thumb_path, metadata = await cobalt_client.download_media(
-                url=url,
-                quality="1080",
-                is_audio=is_music,
-                progress_callback=progress_callback
-            )
-            if file_path:
-                if isinstance(file_path, list):
-                    logging.info(f"[COBALT] ✅ Success: {len(file_path)} files")
-                    file_path = await maybe_add_instagram_audio(file_path)
-                    return file_path, thumb_path, metadata
-                if file_path.exists():
-                    logging.info(f"[COBALT] ✅ Success: {file_path.name}")
-                    return file_path, thumb_path, metadata
-            logging.warning("[COBALT] ⚠️ No file returned")
-        except Exception as cobalt_error:
-            logging.error(f"[COBALT] ❌ Error (Instagram-first): {cobalt_error}")
+
     
     # === МЕТОД 1: YT-DLP (основной) ===
     ytdlp_error = None
