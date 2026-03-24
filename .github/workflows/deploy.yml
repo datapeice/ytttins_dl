@@ -20,7 +20,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           passphrase: ${{ secrets.PASSPHRASE }}
           script: |
-            cd /home/tgbot/dockers/ytttins_dl
+            cd dockers/ytttins_dl
+            git reset --hard
             git pull origin main
-            docker-compose down
-            docker-compose up -d --build
+            docker compose up -d --build bot
