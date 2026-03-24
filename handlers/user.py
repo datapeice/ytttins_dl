@@ -5,7 +5,7 @@ import asyncio
 import time
 import subprocess
 from pathlib import Path
-from aiogram import Router, types, F
+from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton
