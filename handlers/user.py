@@ -223,7 +223,19 @@ async def handle_url(message: types.Message):
                 chunk_size = 10
                 for i in range(0, len(media_group), chunk_size):
                     chunk = media_group[i:i + chunk_size]
-                    await message.answer_media_group(chunk, **reply_kwargs)
+                    
+                    # Retry logic for FloodControl
+                    from aiogram.exceptions import TelegramRetryAfter
+                    for attempt in range(3):
+                        try:
+                            await message.answer_media_group(chunk, **reply_kwargs)
+                            break
+                        except TelegramRetryAfter as e:
+                            logging.warning(f"Flood control: sleeping for {e.retry_after}s")
+                            await asyncio.sleep(e.retry_after)
+                        except Exception as e:
+                            logging.error(f"Error sending media group chunk: {e}")
+                            break
             
             # Send audio separately if available
             if audio_files:
