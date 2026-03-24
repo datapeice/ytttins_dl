@@ -129,10 +129,13 @@ async def handle_url(message: types.Message):
         await message.answer("⛔ Sorry, this bot is private. You are not in the whitelist.", **reply_kwargs)
         return
 
+    is_group = message.chat.type != 'private'
+
     try:
         platform = get_platform(target_url)
         if platform == "unknown":
-            await message.answer("Sorry, this platform is not supported.", **reply_kwargs)
+            if not is_group:
+                await message.answer("Sorry, this platform is not supported.", **reply_kwargs)
             return
 
         if platform == "youtube" and not is_youtube_music(target_url):
@@ -343,6 +346,15 @@ async def handle_url(message: types.Message):
         except Exception:
             pass
         
+        # In group chats, silently ignore unsupported URLs to avoid noise
+        if is_group and "Unsupported URL" in error_msg:
+            if 'status_message' in locals():
+                try:
+                    await status_message.delete()
+                except Exception:
+                    pass
+            return
+
         # User-friendly error messages
         if "Unsupported URL" in error_msg:
             user_error = "❌ This URL is not supported. Please try a different link."
