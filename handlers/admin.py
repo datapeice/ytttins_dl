@@ -115,7 +115,8 @@ async def send_admin_panel(message: types.Message):
         f"📥 Downloads:\n"
         f"   📹 Videos: {weekly_stats['video_count']}\n"
         f"   🎵 Music: {weekly_stats['audio_count']}\n\n"
-        f"👥 Active Users (last 7 days): {weekly_stats['active_users_count']}\n\n"
+        f"👥 Active Users (last 7 days): {weekly_stats['active_users_count']}\n"
+        f"🏘 Active Groups: {weekly_stats.get('active_groups_count', 0)}\n\n"
         f"📝 Whitelisted Users:\n"
         f"{whitelisted_list}\n\n"
         f"🔧 yt-dlp Version:\n"
@@ -465,7 +466,8 @@ async def handle_admin_callback(callback: types.CallbackQuery):
             f"📥 Downloads:\n"
             f"   📹 Videos: {weekly_stats['video_count']}\n"
             f"   🎵 Music: {weekly_stats['audio_count']}\n\n"
-            f"👥 Active Users (last 7 days): {weekly_stats['active_users_count']}\n\n"
+            f"👥 Active Users (last 7 days): {weekly_stats['active_users_count']}\n"
+            f"🏘 Active Groups: {weekly_stats.get('active_groups_count', 0)}\n\n"
             f"📝 Whitelisted Users:\n"
             f"{whitelisted_list}\n\n"
             f"🔧 yt-dlp Version:\n"
@@ -644,21 +646,29 @@ async def process_broadcast(message: types.Message, state: FSMContext):
     
     # Get all unique user IDs who have downloaded
     user_ids = set()
+    group_ids = set()
     
     if stats.Session:
         try:
             with stats.Session() as session:
                 results = session.query(DownloadHistory.user_id).distinct().all()
                 user_ids = {user_id for (user_id,) in results if user_id}
+                
+                from database.models import ActiveGroup
+                group_results = session.query(ActiveGroup.chat_id).distinct().all()
+                group_ids = {group_id for (group_id,) in group_results if group_id}
         except Exception as e:
-            logging.error(f"Error fetching users from DB: {e}")
+            logging.error(f"Error fetching users/groups from DB: {e}")
     else:
         # Fallback to local storage - active_users is Dict[date, Set[user_id]]
         for date, users in stats.active_users.items():
             user_ids.update(users)
+        group_ids.update(stats.active_groups)
     
-    if not user_ids:
-        await message.answer("❌ No users found to broadcast to.")
+    all_targets = user_ids.union(group_ids)
+    
+    if not all_targets:
+        await message.answer("❌ No users or groups found to broadcast to.")
         await state.clear()
         return
     
@@ -672,11 +682,11 @@ async def process_broadcast(message: types.Message, state: FSMContext):
     
     await state.update_data(
         message_id=message.message_id,
-        user_ids=list(user_ids)
+        user_ids=list(all_targets)
     )
     
     await message.answer(
-        f"📊 Ready to broadcast to *{len(user_ids)} users*.\n\n"
+        f"📊 Ready to broadcast to *{len(user_ids)} users* and *{len(group_ids)} groups* (Total: {len(all_targets)}).\n\n"
         f"Confirm to proceed:",
         parse_mode="Markdown",
         reply_markup=keyboard

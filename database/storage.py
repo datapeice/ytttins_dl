@@ -8,7 +8,7 @@ from typing import Dict, Set
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 from config import DATABASE_URL, DATA_DIR, WHITELISTED_ENV
-from database.models import Base, WhitelistedUser, DownloadStat, ActiveUser, Cookie, DownloadHistory
+from database.models import Base, WhitelistedUser, DownloadStat, ActiveUser, ActiveGroup, Cookie, DownloadHistory
 
 class Stats:
     def __init__(self):
@@ -37,6 +37,7 @@ class Stats:
         self.downloads_count = defaultdict(int)
         self.active_users: Dict[str, Set[int]] = {}
         self.whitelisted_users = set()
+        self.active_groups = set()
         
         self._load_data()
         
@@ -60,6 +61,11 @@ class Stats:
                     stats = session.query(DownloadStat).all()
                     for stat in stats:
                         self.downloads_count[stat.content_type] = stat.count
+                        
+                    # Load active groups
+                    groups = session.query(ActiveGroup).all()
+                    for group in groups:
+                        self.active_groups.add(group.chat_id)
             except Exception as e:
                 logging.error(f"Error loading from DB: {e}")
         else:
@@ -82,6 +88,7 @@ class Stats:
                         date: set(users) 
                         for date, users in active_users_data.items()
                     }
+                    self.active_groups = set(data.get('active_groups', []))
                 except Exception as e:
                     logging.error(f"Error loading stats file: {e}")
 
@@ -98,7 +105,8 @@ class Stats:
                 active_users_data = {date: list(users) for date, users in self.active_users.items()}
                 json.dump({
                     'downloads_count': dict(self.downloads_count),
-                    'active_users': active_users_data
+                    'active_users': active_users_data,
+                    'active_groups': list(self.active_groups)
                 }, f, indent=4)
         except Exception as e:
             logging.error(f"Error saving data: {e}")
@@ -188,6 +196,23 @@ class Stats:
             self.active_users[today].add(user_id)
             self._save_data()
 
+    def add_active_group(self, chat_id: int):
+        if chat_id in self.active_groups:
+            return
+            
+        self.active_groups.add(chat_id)
+        if self.Session:
+            try:
+                with self.Session() as session:
+                    exists = session.query(ActiveGroup).filter_by(chat_id=chat_id).first()
+                    if not exists:
+                        session.add(ActiveGroup(chat_id=chat_id))
+                        session.commit()
+            except Exception as e:
+                logging.error(f"Error adding active group to DB: {e}")
+        else:
+            self._save_data()
+
     def get_username_by_id(self, user_id: int) -> str:
         """Returns the username associated with standard user id, or None."""
         if self.Session:
@@ -226,11 +251,13 @@ class Stats:
                         'video_count': total_video,
                         'audio_count': total_audio,
                         'active_users_count': active_count,
-                        'active_users': active_users
+                        'active_users': active_users,
+                        'active_groups_count': len(self.active_groups),
+                        'active_groups': list(self.active_groups)
                     }
             except Exception as e:
                 logging.error(f"Error getting stats from DB: {e}")
-                return {'video_count': 0, 'audio_count': 0, 'active_users_count': 0, 'active_users': set()}
+                return {'video_count': 0, 'audio_count': 0, 'active_users_count': 0, 'active_users': set(), 'active_groups_count': 0, 'active_groups': []}
         else:
             total_video = self.downloads_count['Video']
             total_audio = self.downloads_count['Music']
@@ -248,7 +275,9 @@ class Stats:
                 'video_count': total_video,
                 'audio_count': total_audio,
                 'active_users_count': len(active_users),
-                'active_users': active_users
+                'active_users': active_users,
+                'active_groups_count': len(self.active_groups),
+                'active_groups': list(self.active_groups)
             }
 
 stats = Stats()

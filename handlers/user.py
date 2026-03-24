@@ -110,6 +110,7 @@ async def handle_url(message: types.Message):
     reply_kwargs = {}
     if message.chat.type != 'private':
         reply_kwargs['reply_to_message_id'] = message.message_id
+        stats.add_active_group(message.chat.id)
     
     # Validate Pornhub URLs - must have viewkey parameter
     if "pornhub.com" in target_url.lower():

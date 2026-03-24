@@ -20,6 +20,11 @@ class ActiveUser(Base):
     user_id = Column(BigInteger)
     date = Column(String) # YYYY-MM-DD
 
+class ActiveGroup(Base):
+    __tablename__ = 'active_groups'
+    chat_id = Column(BigInteger, primary_key=True)
+    added_at = Column(DateTime, default=datetime.utcnow)
+
 class Cookie(Base):
     __tablename__ = 'cookies'
     id = Column(Integer, primary_key=True)
