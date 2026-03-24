@@ -590,39 +590,37 @@ async def inline_query_handler(inline_query: types.InlineQuery):
     )
 
     try:
-        from yt_dlp import YoutubeDL
-        import random
-        # Optional: try to get direct url for inline video preview
-        def get_direct_url():
-            opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'skip_download': True,
-                'format': 'best',
-                'http_headers': {
-                    'User-Agent': random.choice([
-                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0'
-                    ])
-                }
-            }
-            with YoutubeDL(opts) as ydl:
-                return ydl.extract_info(url, download=False)
-
-        # Timeout is strictly necessary so Telegram doesn't reject our late answer
-        info = await asyncio.wait_for(asyncio.to_thread(get_direct_url), timeout=4.0)
+        from services.cobalt_client import CobaltClient
+        cobalt = CobaltClient()
         
-        if info and info.get('url'):
-            direct_url = info['url']
-            thumb = info.get('thumbnail', direct_url)
-            title = info.get('title', 'Video')
+        async def fetch_cobalt_url():
+            request_data = {
+                "url": url,
+                "videoQuality": "720",
+                "youtubeVideoCodec": "h264",
+                "downloadMode": "auto",
+                "alwaysProxy": False
+            }
+            resp = await cobalt._make_request(
+                f"{cobalt.api_url}/",
+                method="POST",
+                json_data=request_data
+            )
+            return resp
+
+        # Fast timeout to ensure we don't break the inline query
+        response = await asyncio.wait_for(fetch_cobalt_url(), timeout=4.0)
+        
+        status = response.get("status")
+        if status in ["redirect", "tunnel"]:
+            direct_url = response.get("url")
             
             video_result = types.InlineQueryResultVideo(
                 id=str(uuid.uuid4()),
-                title=f"🎬 {title}",
+                title=f"🎬 Отправить видео",
                 video_url=direct_url,
                 mime_type="video/mp4",
-                thumbnail_url=thumb,
+                thumbnail_url=direct_url,  # Telegram will generate thumb from mp4
                 description="Отправить готовое видео"
             )
             await inline_query.answer([video_result, article_result], cache_time=1, is_personal=False)
