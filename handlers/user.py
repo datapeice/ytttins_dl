@@ -580,15 +580,56 @@ async def inline_query_handler(inline_query: types.InlineQuery):
         
     url = match.group(0)
     
-    results = [
-        InlineQueryResultArticle(
-            id=str(uuid.uuid4()),
-            title="📥 Скачать медиа / Download media",
-            description=f"Нажмите, чтобы отправить ссылку: {url}",
-            input_message_content=InputTextMessageContent(
-                message_text=url
-            )
+    article_result = InlineQueryResultArticle(
+        id=str(uuid.uuid4()),
+        title="📥 Скачать медиа / Download media",
+        description=f"Нажмите, чтобы отправить ссылку (фоновая загрузка)",
+        input_message_content=InputTextMessageContent(
+            message_text=url
         )
-    ]
-    await inline_query.answer(results, cache_time=1, is_personal=False)
+    )
+
+    try:
+        from yt_dlp import YoutubeDL
+        import random
+        # Optional: try to get direct url for inline video preview
+        def get_direct_url():
+            opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'skip_download': True,
+                'format': 'best',
+                'http_headers': {
+                    'User-Agent': random.choice([
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0'
+                    ])
+                }
+            }
+            with YoutubeDL(opts) as ydl:
+                return ydl.extract_info(url, download=False)
+
+        # Timeout is strictly necessary so Telegram doesn't reject our late answer
+        info = await asyncio.wait_for(asyncio.to_thread(get_direct_url), timeout=4.0)
+        
+        if info and info.get('url'):
+            direct_url = info['url']
+            thumb = info.get('thumbnail', direct_url)
+            title = info.get('title', 'Video')
+            
+            video_result = types.InlineQueryResultVideo(
+                id=str(uuid.uuid4()),
+                title=f"🎬 {title}",
+                video_url=direct_url,
+                mime_type="video/mp4",
+                thumbnail_url=thumb,
+                description="Отправить готовое видео"
+            )
+            await inline_query.answer([video_result, article_result], cache_time=1, is_personal=False)
+            return
+
+    except Exception as e:
+        logging.warning(f"Inline direct extraction failed (timeout or error): {e}")
+
+    await inline_query.answer([article_result], cache_time=1, is_personal=False)
 
