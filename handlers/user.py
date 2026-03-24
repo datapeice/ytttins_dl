@@ -627,7 +627,71 @@ async def inline_query_handler(inline_query: types.InlineQuery):
             return
 
     except Exception as e:
-        logging.warning(f"Inline direct extraction failed (timeout or error): {e}")
+        logging.warning(f"Inline direct extraction failed: {e}")
 
     await inline_query.answer([article_result], cache_time=1, is_personal=False)
+
+@router.chosen_inline_result()
+async def inline_result_chosen(chosen_result: types.ChosenInlineResult, bot: Bot):
+    url = chosen_result.query.strip()
+    url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
+    
+    match = re.search(url_pattern, url)
+    if not match:
+        return
+        
+    target_url = match.group(0)
+    user_id = chosen_result.from_user.id
+    
+    try:
+        # Send a status message privately
+        status_msg = await bot.send_message(user_id, f"📥 Загружаю видео по вашей inline-ссылке...\n{target_url}")
+        
+        async def update_status(text: str):
+            try:
+                await status_msg.edit_text(text)
+            except:
+                pass
+
+        is_music = is_youtube_music(target_url)
+        file_path, thumbnail_path, metadata = await download_media(target_url, is_music, progress_callback=update_status)
+        
+        platform = get_platform(target_url)
+        caption = format_caption(metadata, platform, target_url)
+        
+        if file_path and file_path.exists():
+            await update_status("📤 Отправляю готовое видео...")
+            
+            # Send the actual video
+            duration_value = int(metadata.get('duration', 0))
+            if duration_value <= 0:
+                 duration_value = await probe_media_duration_seconds(file_path)
+
+            video_kwargs = {
+                'video': types.FSInputFile(file_path),
+                'duration': duration_value,
+                'supports_streaming': True,
+                'caption': caption,
+                'parse_mode': 'HTML'
+            }
+            if metadata.get('width') and metadata.get('height'):
+                 video_kwargs['width'] = metadata.get('width')
+                 video_kwargs['height'] = metadata.get('height')
+            if thumbnail_path:
+                 video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
+                 
+            await bot.send_video(user_id, **video_kwargs)
+            
+            # Cleanup
+            file_path.unlink()
+            if thumbnail_path and thumbnail_path.exists(): thumbnail_path.unlink()
+            await status_msg.delete()
+        else:
+            await update_status("❌ Ошибка: Файл не скачался.")
+    except Exception as e:
+        logging.error(f"Chosen inline result download error: {e}")
+        try:
+            await bot.send_message(user_id, f"❌ Ошибка скачивания: {e}")
+        except:
+            pass
 
