@@ -13,6 +13,7 @@ from services.downloader import download_media, get_platform, is_youtube_music
 from database.storage import stats
 from services.logger import download_logger
 from config import DOWNLOADS_DIR
+from aiogram.types import InlineQueryResultArticle, InputTextMessageContent
 
 router = Router()
 url_cache = {}
@@ -100,14 +101,16 @@ async def handle_url(message: types.Message):
     # Accept any URL-like string
     url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
     
-    if not re.search(url_pattern, message.text):
-        await message.answer("Please send a valid URL.")
+    match = re.search(url_pattern, message.text)
+    if not match:
         return
+        
+    target_url = match.group(0)
     
     # Validate Pornhub URLs - must have viewkey parameter
-    if "pornhub.com" in message.text.lower():
-        if "viewkey=" not in message.text:
-            await message.answer(
+    if "pornhub.com" in target_url.lower():
+        if "viewkey=" not in target_url:
+            await message.reply(
                 "❌ Invalid Pornhub URL!\n\n"
                 "The URL must contain a video ID (viewkey parameter).\n"
                 "Example: https://www.pornhub.com/view_video.php?viewkey=xxxxx\n\n"
@@ -121,24 +124,24 @@ async def handle_url(message: types.Message):
         return
 
     try:
-        platform = get_platform(message.text)
+        platform = get_platform(target_url)
         if platform == "unknown":
-            await message.answer("Sorry, this platform is not supported.")
+            await message.reply("Sorry, this platform is not supported.")
             return
 
-        if platform == "youtube" and not is_youtube_music(message.text):
+        if platform == "youtube" and not is_youtube_music(target_url):
             request_id = str(uuid.uuid4())[:8]
-            url_cache[request_id] = message.text
+            url_cache[request_id] = target_url
             
             builder = InlineKeyboardBuilder()
             builder.add(
                 InlineKeyboardButton(text="🎵 Audio (MP3)", callback_data=f"format:audio:{request_id}"),
                 InlineKeyboardButton(text="🎥 Video", callback_data=f"format:video:{request_id}")
             )
-            await message.answer("Choose download format:", reply_markup=builder.as_markup())
+            await message.reply("Choose download format:", reply_markup=builder.as_markup())
             return
 
-        status_message = await message.answer("⏳ Starting...")
+        status_message = await message.reply("⏳ Starting...")
         
         async def update_status(text: str):
             try:
@@ -146,8 +149,8 @@ async def handle_url(message: types.Message):
             except Exception:
                 pass
         
-        is_music = is_youtube_music(message.text)
-        file_path, thumbnail_path, metadata = await download_media(message.text, is_music, progress_callback=update_status)
+        is_music = is_youtube_music(target_url)
+        file_path, thumbnail_path, metadata = await download_media(target_url, is_music, progress_callback=update_status)
 
         # Determine title based on file_path type
         if isinstance(file_path, list):
@@ -162,7 +165,7 @@ async def handle_url(message: types.Message):
             user_id=message.from_user.id,
             username=stored_name,
             platform=platform,
-            url=message.text,
+            url=target_url,
             title=title
         )
 
@@ -171,7 +174,7 @@ async def handle_url(message: types.Message):
             f"User: {display_name} ({handle}, ID: {user_id}) | "
             f"Platform: {platform} | "
             f"Type: {'Music' if is_music else 'Video'} | "
-            f"URL: {message.text}"
+            f"URL: {target_url}"
         )
 
         if isinstance(file_path, list):
@@ -187,7 +190,7 @@ async def handle_url(message: types.Message):
             audio_files = [f for f in file_path if f.suffix.lower() in audio_exts]
             
             # Prepare unified caption
-            caption = format_caption(metadata, platform, message.text)
+            caption = format_caption(metadata, platform, target_url)
 
             media_group = []
             ordered_files = sorted(image_files + video_files, key=lambda p: p.name)
@@ -214,15 +217,24 @@ async def handle_url(message: types.Message):
                 chunk_size = 10
                 for i in range(0, len(media_group), chunk_size):
                     chunk = media_group[i:i + chunk_size]
-                    await message.answer_media_group(chunk)
+                    try:
+                        await message.reply_media_group(chunk)
+                    except AttributeError:
+                        await message.answer_media_group(chunk, reply_to_message_id=message.message_id)
             
             # Send audio separately if available
             if audio_files:
                 for audio_path in audio_files:
                     try:
-                        await message.answer_audio(
-                            types.FSInputFile(audio_path)
-                        )
+                        try:
+                            await message.reply_audio(
+                                types.FSInputFile(audio_path)
+                            )
+                        except AttributeError:
+                            await message.answer_audio(
+                                types.FSInputFile(audio_path),
+                                reply_to_message_id=message.message_id
+                            )
                     except Exception as e:
                         logging.error(f"Failed to send audio: {e}")
 
@@ -238,15 +250,23 @@ async def handle_url(message: types.Message):
             await update_status("📤 Uploading to Telegram...")
             
             # Use unified caption format
-            caption = format_caption(metadata, platform, message.text)
+            caption = format_caption(metadata, platform, target_url)
 
             image_exts = ['.jpg', '.jpeg', '.png', '.webp']
             if file_path.suffix.lower() in image_exts:
-                await message.answer_photo(
-                    types.FSInputFile(file_path),
-                    caption=caption,
-                    parse_mode='HTML'
-                )
+                try:
+                    await message.reply_photo(
+                        types.FSInputFile(file_path),
+                        caption=caption,
+                        parse_mode='HTML'
+                    )
+                except AttributeError:
+                    await message.answer_photo(
+                        types.FSInputFile(file_path),
+                        caption=caption,
+                        parse_mode='HTML',
+                        reply_to_message_id=message.message_id
+                    )
                 file_path.unlink()
                 if thumbnail_path and thumbnail_path.exists():
                     thumbnail_path.unlink()
@@ -255,20 +275,39 @@ async def handle_url(message: types.Message):
 
             if is_music:
                 if thumbnail_path:
-                    await message.answer_audio(
-                        types.FSInputFile(file_path), 
-                        thumbnail=types.FSInputFile(thumbnail_path),
-                        duration=int(metadata.get('duration', 0)),
-                        caption=caption,
-                        parse_mode='HTML'
-                    )
+                    try:
+                        await message.reply_audio(
+                            types.FSInputFile(file_path), 
+                            thumbnail=types.FSInputFile(thumbnail_path),
+                            duration=int(metadata.get('duration', 0)),
+                            caption=caption,
+                            parse_mode='HTML'
+                        )
+                    except AttributeError:
+                        await message.answer_audio(
+                            types.FSInputFile(file_path), 
+                            thumbnail=types.FSInputFile(thumbnail_path),
+                            duration=int(metadata.get('duration', 0)),
+                            caption=caption,
+                            parse_mode='HTML',
+                            reply_to_message_id=message.message_id
+                        )
                 else:
-                    await message.answer_audio(
-                        types.FSInputFile(file_path),
-                        duration=int(metadata.get('duration', 0)),
-                        caption=caption,
-                        parse_mode='HTML'
-                    )
+                    try:
+                        await message.reply_audio(
+                            types.FSInputFile(file_path),
+                            duration=int(metadata.get('duration', 0)),
+                            caption=caption,
+                            parse_mode='HTML'
+                        )
+                    except AttributeError:
+                        await message.answer_audio(
+                            types.FSInputFile(file_path),
+                            duration=int(metadata.get('duration', 0)),
+                            caption=caption,
+                            parse_mode='HTML',
+                            reply_to_message_id=message.message_id
+                        )
             else:
                 duration_value = int(metadata.get('duration', 0))
                 if duration_value <= 0:
@@ -293,7 +332,11 @@ async def handle_url(message: types.Message):
                 
                 # Measure upload time to Telegram
                 upload_start = time.time()
-                await message.answer_video(**video_kwargs)
+                try:
+                    await message.reply_video(**video_kwargs)
+                except AttributeError:
+                    video_kwargs["reply_to_message_id"] = message.message_id
+                    await message.answer_video(**video_kwargs)
                 upload_time = time.time() - upload_start
                 file_size_mb = file_path.stat().st_size / (1024 * 1024)
                 logging.info(f"✅ Video uploaded to Telegram in {upload_time:.1f}s ({file_size_mb:.2f}MB, {file_size_mb/upload_time:.2f}MB/s)")
@@ -556,3 +599,27 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
 
     except Exception as e:
         logging.error(f"Error in resolution callback: {str(e)}")
+
+@router.inline_query()
+async def inline_query_handler(inline_query: types.InlineQuery):
+    text = inline_query.query.strip()
+    url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
+    
+    match = re.search(url_pattern, text)
+    if not match:
+        return
+        
+    url = match.group(0)
+    
+    results = [
+        InlineQueryResultArticle(
+            id=str(uuid.uuid4()),
+            title="📥 Скачать медиа / Download media",
+            description=f"Нажмите, чтобы отправить ссылку: {url}",
+            input_message_content=InputTextMessageContent(
+                message_text=url
+            )
+        )
+    ]
+    await inline_query.answer(results, cache_time=1, is_personal=False)
+
