@@ -135,30 +135,6 @@ async def send_admin_panel(message: types.Message):
         [InlineKeyboardButton(text="📂 Get Logs", callback_data="admin:get_logs"),
         InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
     ])
-    
-    if weekly_stats['active_users']:
-        user_list = []
-        bot = message.bot
-        for user_id in weekly_stats['active_users']:
-            try:
-                db_username = stats.get_username_by_id(user_id)
-                if db_username:
-                    user_list.append(f"@{db_username}")
-                else:
-                    user = await bot.get_chat(user_id)
-                    if user.username:
-                        user_list.append(f"@{user.username}")
-                    else:
-                        name = user.full_name or user.first_name or f"User {user_id}"
-                        user_list.append(f"<a href='tg://user?id={user_id}'>{html.escape(name)}</a>")
-            except Exception:
-                user_list.append(f"<a href='tg://user?id={user_id}'>User {user_id}</a>")
-        
-        stats_message += "Active Users List:\n"
-        stats_message += "\n".join(user_list)
-    else:
-        stats_message += "No active users in the last 7 days."
-
     await message.answer(stats_message, reply_markup=keyboard, parse_mode="HTML")
 
 # Broadcast message handlers - Must be before general admin handler
@@ -486,34 +462,6 @@ async def handle_admin_callback(callback: types.CallbackQuery):
             [InlineKeyboardButton(text="📂 Get Logs", callback_data="admin:get_logs"),
             InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
         ])
-        
-        if weekly_stats['active_users']:
-            user_list = []
-            # callback.message.bot используется для получения инфы о чатах
-            try:
-                bot = callback.message.bot
-                for user_id in weekly_stats['active_users']:
-                    try:
-                        db_username = stats.get_username_by_id(user_id)
-                        if db_username:
-                            user_list.append(f"@{db_username}")
-                        else:
-                            user = await bot.get_chat(user_id)
-                            if user.username:
-                                user_list.append(f"@{user.username}")
-                            else:
-                                name = user.full_name or user.first_name or f"User {user_id}"
-                                user_list.append(f"<a href='tg://user?id={user_id}'>{html.escape(name)}</a>")
-                    except Exception:
-                        user_list.append(f"<a href='tg://user?id={user_id}'>User {user_id}</a>")
-            except:
-                pass
-            
-            stats_message += "Active Users List:\n"
-            stats_message += "\n".join(user_list)
-        else:
-            stats_message += "No active users in the last 7 days."
-
         try:
             await callback.message.edit_text(stats_message, reply_markup=keyboard, parse_mode="HTML")
         except Exception:
