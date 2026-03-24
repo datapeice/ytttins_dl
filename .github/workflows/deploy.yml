@@ -8,7 +8,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: Actions
+    environment: ytttins-bot
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
