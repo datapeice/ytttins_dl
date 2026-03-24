@@ -634,11 +634,13 @@ async def inline_query_handler(inline_query: types.InlineQuery):
 
 @router.chosen_inline_result()
 async def inline_result_chosen(chosen_result: types.ChosenInlineResult, bot: Bot):
+    logging.warning(f"GOT CHOSEN INLINE: {chosen_result.query} from {chosen_result.from_user.id}")
     url = chosen_result.query.strip()
     url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
     
     match = re.search(url_pattern, url)
     if not match:
+        logging.warning("Chosen inline URL did not match regex")
         return
         
     target_url = match.group(0)
