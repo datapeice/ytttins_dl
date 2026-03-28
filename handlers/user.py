@@ -93,10 +93,129 @@ async def cmd_start(message: types.Message):
         "- Pinterest\n"
         "- VK / Dailymotion\n"
         "- And 1800+ other sites!\n\n"
-        "Developed by @datapeice"
+        "🔍 <b>Song search:</b> Start your message with <code>найти</code> followed by the song name to search and download it as MP3.\n"
+        "Example: <code>найти Smells Like Teen Spirit</code>\n\n"
+        "Developed by @datapeice",
+        parse_mode='HTML'
     )
 
-@router.message(lambda m: m.text and not m.text.startswith(('/start', '/panel', '/whitelist', '/unwhitelist', 'add @')))
+@router.message(lambda m: m.text and m.text.lower().startswith('найти '))
+async def handle_search(message: types.Message):
+    query = message.text[message.text.lower().index('найти ') + len('найти '):].strip()
+    if not query:
+        await message.answer("❌ Please provide a song name after 'найти'.")
+        return
+
+    reply_kwargs = {}
+    if message.chat.type != 'private':
+        reply_kwargs['reply_to_message_id'] = message.message_id
+        stats.add_active_group(message.chat.id)
+
+    # Whitelist check
+    if stats.whitelisted_users and not stats.is_whitelisted(message.from_user.username):
+        await message.answer("⛔ Sorry, this bot is private. You are not in the whitelist.", **reply_kwargs)
+        return
+
+    is_group = message.chat.type != 'private'
+
+    if is_group:
+        status_message = None
+        async def update_status(text: str):
+            pass
+    else:
+        status_message = await message.answer(f"🔍 Searching for: {query}...", **reply_kwargs)
+        async def update_status(text: str):
+            try:
+                await status_message.edit_text(text)
+            except Exception:
+                pass
+
+    search_url = f"ytsearch1:{query}"
+
+    try:
+        file_path, thumbnail_path, metadata = await download_media(search_url, is_music=True, progress_callback=update_status)
+
+        display_name, stored_name, handle = resolve_user_identity(message.from_user)
+        stats.add_active_user(message.from_user.id)
+        video_url = metadata.get('webpage_url', search_url)
+        stats.add_download(
+            content_type='Music',
+            user_id=message.from_user.id,
+            username=stored_name,
+            platform='youtube',
+            url=video_url,
+            title=file_path.stem
+        )
+
+        download_logger.info(
+            f"User: {display_name} ({handle}, ID: {message.from_user.id}) | "
+            f"Platform: youtube | "
+            f"Type: Music (search) | "
+            f"Query: {query} | "
+            f"URL: {video_url}"
+        )
+
+        if file_path.exists():
+            await update_status("📤 Uploading to Telegram...")
+            caption = format_caption(metadata, 'youtube', video_url)
+
+            if thumbnail_path:
+                await message.answer_audio(
+                    types.FSInputFile(file_path),
+                    thumbnail=types.FSInputFile(thumbnail_path),
+                    duration=int(metadata.get('duration', 0)),
+                    caption=caption,
+                    parse_mode='HTML',
+                    **reply_kwargs
+                )
+            else:
+                await message.answer_audio(
+                    types.FSInputFile(file_path),
+                    duration=int(metadata.get('duration', 0)),
+                    caption=caption,
+                    parse_mode='HTML',
+                    **reply_kwargs
+                )
+
+            file_path.unlink()
+            if thumbnail_path and thumbnail_path.exists():
+                thumbnail_path.unlink()
+            if status_message:
+                await status_message.delete()
+        else:
+            if status_message:
+                await status_message.edit_text("❌ Sorry, something went wrong during download.")
+
+    except Exception as e:
+        error_msg = str(e)
+        logging.error(f"Search error: {error_msg}")
+        try:
+            if 'file_path' in locals() and file_path:
+                if isinstance(file_path, list):
+                    for p in file_path:
+                        if p.exists(): p.unlink()
+                elif file_path.exists():
+                    file_path.unlink()
+            if 'thumbnail_path' in locals() and thumbnail_path and thumbnail_path.exists():
+                thumbnail_path.unlink()
+        except Exception:
+            pass
+
+        if is_group:
+            return
+
+        user_error = (
+            f"❌ Could not find or download the song.\n\n"
+            f"```error\n{error_msg}\n```\n\n"
+            f"Contact with developer @datapeice"
+        )
+        if status_message:
+            await status_message.edit_text(user_error, parse_mode='Markdown')
+        else:
+            await message.answer(user_error, parse_mode='Markdown', **reply_kwargs)
+
+
+@router.message(lambda m: m.text and not m.text.startswith(('/start', '/panel', '/whitelist', '/unwhitelist', 'add @')) and not m.text.lower().startswith('найти '))
 async def handle_url(message: types.Message):
     # Accept any URL-like string
     url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
