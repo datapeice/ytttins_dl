@@ -150,14 +150,19 @@ async def handle_url(message: types.Message):
             await message.answer("Choose download format:", reply_markup=builder.as_markup(), **reply_kwargs)
             return
 
-        status_message = await message.answer("⏳ Starting...", **reply_kwargs)
-        
-        async def update_status(text: str):
-            try:
-                await status_message.edit_text(text)
-            except Exception:
+        # Stealth mode: in groups, skip status messages and use a no-op callback
+        if is_group:
+            status_message = None
+            async def update_status(text: str):
                 pass
-        
+        else:
+            status_message = await message.answer("⏳ Starting...", **reply_kwargs)
+            async def update_status(text: str):
+                try:
+                    await status_message.edit_text(text)
+                except Exception:
+                    pass
+
         is_music = is_youtube_music(target_url)
         file_path, thumbnail_path, metadata = await download_media(target_url, is_music, progress_callback=update_status)
 
@@ -257,7 +262,8 @@ async def handle_url(message: types.Message):
                     photo_path.unlink()
                 except Exception:
                     pass
-            await status_message.delete()
+            if status_message:
+                await status_message.delete()
 
         elif file_path.exists():
             await update_status("📤 Uploading to Telegram...")
@@ -276,7 +282,8 @@ async def handle_url(message: types.Message):
                 file_path.unlink()
                 if thumbnail_path and thumbnail_path.exists():
                     thumbnail_path.unlink()
-                await status_message.delete()
+                if status_message:
+                    await status_message.delete()
                 return
 
             if is_music:
@@ -329,9 +336,11 @@ async def handle_url(message: types.Message):
             file_path.unlink()
             if thumbnail_path and thumbnail_path.exists():
                 thumbnail_path.unlink()
-            await status_message.delete()
+            if status_message:
+                await status_message.delete()
         else:
-            await status_message.edit_text("Sorry, something went wrong during download.")
+            if status_message:
+                await status_message.edit_text("Sorry, something went wrong during download.")
     
     except Exception as e:
         error_msg = str(e)
@@ -346,13 +355,8 @@ async def handle_url(message: types.Message):
         except Exception:
             pass
         
-        # In group chats, silently ignore unsupported URLs to avoid noise
-        if is_group and "Unsupported URL" in error_msg:
-            if 'status_message' in locals():
-                try:
-                    await status_message.delete()
-                except Exception:
-                    pass
+        # In group chats, silently ignore all errors to avoid noise
+        if is_group:
             return
 
         # User-friendly error messages
@@ -368,7 +372,7 @@ async def handle_url(message: types.Message):
                 f"Contact with developer @datapeice"
             )
         
-        if 'status_message' in locals():
+        if status_message:
             await status_message.edit_text(user_error, parse_mode='Markdown' if '```' in user_error else None)
         else:
             await message.answer(user_error, parse_mode='Markdown' if '```' in user_error else None, **reply_kwargs)

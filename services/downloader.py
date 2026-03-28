@@ -211,6 +211,8 @@ def get_platform(url: str) -> str:
         return "dailymotion"
     elif "pornhub.com" in url_lower:
         return "pornhub"
+    elif "://t.me" in url_lower or "://telegram.me" in url_lower:
+        return "unknown"
     elif "https://" in url_lower or "http://" in url_lower:
         # yt-dlp supports 1800+ sites, try anyway
         return "video"
