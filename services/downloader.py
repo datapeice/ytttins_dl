@@ -550,6 +550,8 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     'playlist_items': '1' if is_youtube else '1-5',  # Try multiple embeds for generic sites
                     'noplaylist': True,  # Skip playlists
                     'max_filesize': 2048 * 1024 * 1024,  # 2GB limit for safety (Telegram max)
+                    'external_downloader': 'aria2c',
+                    'external_downloader_args': ['--max-connection-per-server=16', '--split=16', '--min-split-size=1M'],
                     'exec_before_download': [],  # Prevent PhantomJS usage
                     'extractor_args': {
                         'pornhub': {
