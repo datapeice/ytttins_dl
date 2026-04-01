@@ -157,8 +157,8 @@ async def handle_search(message: types.Message):
 
     try:
         search_methods = [
-            ("youtube", f"ytsearch1:{query} official audio"),
-            ("soundcloud", f"scsearch1:{query}")
+            ("soundcloud", f"scsearch1:{query}"),
+            ("youtube", f"ytsearch1:{query} official audio")
         ]
         
         file_path, thumbnail_path, metadata = None, None, {}
