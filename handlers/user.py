@@ -26,7 +26,7 @@ def resolve_user_identity(user: types.User) -> tuple[str, str, str]:
     handle = f"@{username}" if username else display_name
     return display_name, stored_name, handle
 
-def format_caption(metadata: dict, platform: str, original_url: str = "") -> str:
+def format_caption(metadata: dict, platform: str, original_url: str = "", is_music: bool = False) -> str:
     """Generate unified caption format for all platforms."""
     uploader = metadata.get('uploader', 'Unknown')
     url = original_url or metadata.get('webpage_url', '')
@@ -46,17 +46,18 @@ def format_caption(metadata: dict, platform: str, original_url: str = "") -> str
         # Use a combination of a visible emoji and custom tg-emoji if supported
         uploader = f"{uploader} <tg-emoji emoji-id=\"5233582409416448551\">✅</tg-emoji>"
 
+    parts = []
     # Only show uploader if it's not "Unknown", or if it's TikTok (where we want to show it anyway)
     if uploader.lower() != "unknown" or platform == "tiktok":
-        caption = (
-            f"👤 {uploader} | {title} (<a href=\"{url}\">Link</a>)\n"
-            f"Developed by @datapeice"
-        )
+        parts.append(f"👤 {uploader}")
+    
+    if is_music:
+        parts.append(f"<a href=\"{url}\">{title}</a>")
     else:
-        caption = (
-            f"{title} (<a href=\"{url}\">Link</a>)\n"
-            f"Developed by @datapeice"
-        )
+        # Video: only "Link" without title/description
+        parts.append(f"<a href=\"{url}\">Link</a>")
+        
+    caption = " | ".join(parts) + "\n" + "Developed by @datapeice"
     return caption
 
 async def probe_media_duration_seconds(media_path: Path) -> int:
@@ -227,7 +228,7 @@ async def handle_search(message: types.Message):
                 f"Title: {history_title}"
             )
                 
-            caption = format_caption(metadata, successful_platform, video_url)
+            caption = format_caption(metadata, successful_platform, video_url, is_music=True)
             
             # Override thumbnail with high-res cover if available
             local_cover_path_str = rich_meta.get("local_cover_path")
@@ -407,7 +408,7 @@ async def handle_url(message: types.Message):
             audio_files = [f for f in file_path if f.suffix.lower() in audio_exts]
             
             # Prepare unified caption
-            caption = format_caption(metadata, platform, target_url)
+            caption = format_caption(metadata, platform, target_url, is_music=is_music)
 
             media_group = []
             ordered_files = sorted(image_files + video_files, key=lambda p: p.name)
@@ -472,7 +473,7 @@ async def handle_url(message: types.Message):
             await update_status("📤 Uploading to Telegram...")
             
             # Use unified caption format
-            caption = format_caption(metadata, platform, target_url)
+            caption = format_caption(metadata, platform, target_url, is_music=is_music)
 
             image_exts = ['.jpg', '.jpeg', '.png', '.webp']
             if file_path.suffix.lower() in image_exts:
@@ -639,7 +640,7 @@ async def handle_format_selection(callback: types.CallbackQuery):
             if file_path.exists():
                 await update_status("📤 Uploading to Telegram...")
                 
-                caption = format_caption(metadata, 'youtube', url)
+                caption = format_caption(metadata, 'youtube', url, is_music=is_music)
 
                 if thumbnail_path:
                     await callback.message.answer_audio(
@@ -745,7 +746,7 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
             if file_path.exists():
                 await update_status("📤 Uploading to Telegram...")
                 
-                caption = format_caption(metadata, 'youtube', url)
+                caption = format_caption(metadata, 'youtube', url, is_music=False)
 
                 duration_value = int(metadata.get('duration', 0))
                 if duration_value <= 0:
