@@ -547,8 +547,9 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     'socket_timeout': 30,  # Prevent hanging on slow/blocked connections
                     'retries': 3,  # Retry failed fragments
                     'fragment_retries': 3,  # Retry failed fragments
-                    'playlist_items': '1',  # Only download first item if URL is a playlist
+                    'playlist_items': '1' if is_youtube else '1-5',  # Try multiple embeds for generic sites
                     'noplaylist': True,  # Skip playlists
+                    'max_filesize': 2048 * 1024 * 1024,  # 2GB limit for safety (Telegram max)
                     'exec_before_download': [],  # Prevent PhantomJS usage
                     'extractor_args': {
                         'pornhub': {
@@ -691,6 +692,11 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
 
                 file_path = _select_best_downloaded_file(downloaded_files)
                 _cleanup_extra_files(downloaded_files, file_path)
+                
+                if file_path.suffix == '.unknown_video':
+                    file_path.unlink()
+                    raise ValueError("Downloaded file is an invalid or unsupported format (.unknown_video)")
+                
                 logging.info(f"Downloaded: {file_path.name}")
                 
                 # Generate thumbnail if missing and mandatory probe for dimensions
