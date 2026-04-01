@@ -158,6 +158,7 @@ async def handle_search(message: types.Message):
     try:
         search_methods = [
             ("soundcloud", f"scsearch1:{query}"),
+            ("yt music", f"ytmusicsearch1:{query}"),
             ("youtube", f"ytsearch1:{query} official audio")
         ]
         
