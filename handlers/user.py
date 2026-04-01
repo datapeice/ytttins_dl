@@ -3,6 +3,7 @@ import re
 import logging
 import asyncio
 import time
+import random
 import subprocess
 from pathlib import Path
 from aiogram import Router, types, F, Bot
@@ -18,6 +19,13 @@ from services.metadata import fetch_song_metadata
 
 router = Router()
 url_cache = {}
+
+def get_random_support_kb():
+    if random.randint(1, 15) == 1:
+        builder = InlineKeyboardBuilder()
+        builder.add(InlineKeyboardButton(text="⭐️ Support Bot ⭐️", callback_data="show_donate_menu"))
+        return builder.as_markup()
+    return None
 
 def resolve_user_identity(user: types.User) -> tuple[str, str, str]:
     display_name = user.full_name or user.first_name or "Unknown"
@@ -138,7 +146,6 @@ async def handle_donate(message: types.Message, bot: Bot):
         "⭐️ <b>Support bot development!</b>\n\n"
         "Your donations help pay for servers and develop new features. "
         "We use <b>Telegram Stars</b> — this is the official and safe way to thank the developer.\n\n"
-        "💎 Stars can be withdrawn via Fragment to TON, making your contribution extremely valuable!\n\n"
         "Choose an amount below, or type <code>/donate &lt;amount&gt;</code> for a custom amount:"
     )
     
@@ -153,6 +160,29 @@ async def handle_donate(message: types.Message, bot: Bot):
     builder.adjust(2)
     
     await message.answer(text, reply_markup=builder.as_markup(), parse_mode='HTML')
+
+@router.callback_query(F.data == "show_donate_menu")
+async def callback_show_donate_menu(callback: types.CallbackQuery, bot: Bot):
+    await callback.answer()
+    
+    text = (
+        "⭐️ <b>Support bot development!</b>\n\n"
+        "Your donations help pay for servers and develop new features. "
+        "We use <b>Telegram Stars</b> — this is the official and safe way to thank the developer.\n\n"
+        "Choose an amount below, or type <code>/donate &lt;amount&gt;</code> for a custom amount:"
+    )
+    
+    builder = InlineKeyboardBuilder()
+    builder.add(
+        InlineKeyboardButton(text="☕️ 50", callback_data="donate:50"),
+        InlineKeyboardButton(text="🥤 100", callback_data="donate:100"),
+        InlineKeyboardButton(text="🍔 250", callback_data="donate:250"),
+        InlineKeyboardButton(text="🍕 500", callback_data="donate:500"),
+        InlineKeyboardButton(text="💎 1000", callback_data="donate:1000")
+    )
+    builder.adjust(2)
+    
+    await bot.send_message(callback.from_user.id, text, reply_markup=builder.as_markup(), parse_mode='HTML')
 
 @router.callback_query(F.data.startswith("donate:"))
 async def handle_donate_selection(callback: types.CallbackQuery, bot: Bot):
@@ -573,6 +603,7 @@ async def handle_url(message: types.Message):
                     types.FSInputFile(file_path),
                     caption=caption,
                     parse_mode='HTML',
+                    reply_markup=get_random_support_kb(),
                     **reply_kwargs
                 )
                 file_path.unlink()
@@ -590,6 +621,7 @@ async def handle_url(message: types.Message):
                         duration=int(metadata.get('duration', 0)),
                         caption=caption,
                         parse_mode='HTML',
+                        reply_markup=get_random_support_kb(),
                         **reply_kwargs
                     )
                 else:
@@ -598,6 +630,7 @@ async def handle_url(message: types.Message):
                         duration=int(metadata.get('duration', 0)),
                         caption=caption,
                         parse_mode='HTML',
+                        reply_markup=get_random_support_kb(),
                         **reply_kwargs
                     )
             else:
@@ -610,7 +643,8 @@ async def handle_url(message: types.Message):
                     'duration': duration_value,
                     'supports_streaming': True,
                     'caption': caption,
-                    'parse_mode': 'HTML'
+                    'parse_mode': 'HTML',
+                    'reply_markup': get_random_support_kb()
                 }
                 
                 if metadata.get('width') and metadata.get('height'):
@@ -744,7 +778,8 @@ async def handle_format_selection(callback: types.CallbackQuery, bot: Bot):
                     thumbnail=types.FSInputFile(thumbnail_path) if thumbnail_path else None,
                     duration=int(metadata.get('duration', 0)),
                     caption=caption,
-                    parse_mode='HTML'
+                    parse_mode='HTML',
+                    reply_markup=get_random_support_kb()
                 )
                 
                 if callback.inline_message_id:
@@ -844,7 +879,8 @@ async def handle_resolution_selection(callback: types.CallbackQuery, bot: Bot):
                     'duration': duration_value,
                     'supports_streaming': True,
                     'caption': caption,
-                    'parse_mode': 'HTML'
+                    'parse_mode': 'HTML',
+                    'reply_markup': get_random_support_kb()
                 }
                 
                 if metadata.get('width') and metadata.get('height'):
