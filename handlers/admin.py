@@ -136,7 +136,8 @@ async def send_admin_panel(message: types.Message):
         [InlineKeyboardButton(text="🍪 Update Cookies", callback_data="admin:update_cookies"),
         InlineKeyboardButton(text="🔄 Update yt-dlp", callback_data="admin:update_ytdlp")],
         [InlineKeyboardButton(text="📂 Get Logs", callback_data="admin:get_logs"),
-        InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
+        InlineKeyboardButton(text="🗑 Clear Logs", callback_data="admin:clear_logs")],
+        [InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
     ])
     await message.answer(stats_message, reply_markup=keyboard, parse_mode="HTML")
 
@@ -490,7 +491,8 @@ async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext
             [InlineKeyboardButton(text="🍪 Update Cookies", callback_data="admin:update_cookies"),
             InlineKeyboardButton(text="🔄 Update yt-dlp", callback_data="admin:update_ytdlp")],
             [InlineKeyboardButton(text="📂 Get Logs", callback_data="admin:get_logs"),
-            InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
+            InlineKeyboardButton(text="🗑 Clear Logs", callback_data="admin:clear_logs")],
+            [InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
         ])
         try:
             await callback.message.edit_text(stats_message, reply_markup=keyboard, parse_mode="HTML")
@@ -502,17 +504,69 @@ async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext
         pass
 
     elif action == "get_logs":
-        # ... (оставляем логику логов как есть)
         log_files = [Path("logs/bot.log"), Path("bot.log")]
         found = False
         for log_file in log_files:
             if log_file.exists() and log_file.stat().st_size > 0:
+                size_kb = log_file.stat().st_size / 1024
                 filename = log_file.stem + ".txt"
-                await callback.message.answer_document(types.FSInputFile(log_file, filename=filename), caption=f"📂 {filename}")
+                await callback.message.answer_document(
+                    types.FSInputFile(log_file, filename=filename),
+                    caption=f"📂 {filename} ({size_kb:.1f} KB)"
+                )
                 found = True
         
         if not found:
             await callback.message.answer("❌ No log files found.")
+        await callback.answer()
+
+    elif action == "clear_logs":
+        # Find log files and show size info with confirmation
+        log_files = [Path("logs/bot.log"), Path("bot.log")]
+        found_files = [f for f in log_files if f.exists() and f.stat().st_size > 0]
+
+        if not found_files:
+            await callback.answer("No log files found.", show_alert=True)
+            return
+
+        total_size_kb = sum(f.stat().st_size for f in found_files) / 1024
+        names = ", ".join(f.name for f in found_files)
+
+        confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Yes, clear", callback_data="admin:clear_logs_confirm"),
+                InlineKeyboardButton(text="❌ Cancel", callback_data="admin:back")
+            ]
+        ])
+        await callback.message.edit_text(
+            f"⚠️ <b>Are you sure?</b>\n\n"
+            f"Files: <code>{names}</code>\n"
+            f"Total size: <b>{total_size_kb:.1f} KB</b>\n\n"
+            f"This will erase all log data permanently.",
+            parse_mode="HTML",
+            reply_markup=confirm_keyboard
+        )
+        await callback.answer()
+
+    elif action == "clear_logs_confirm":
+        log_files = [Path("logs/bot.log"), Path("bot.log")]
+        cleared = []
+        for log_file in log_files:
+            if log_file.exists():
+                try:
+                    log_file.write_text("")  # Truncate without deleting the file
+                    cleared.append(log_file.name)
+                except Exception as e:
+                    logging.error(f"Failed to clear log {log_file}: {e}")
+
+        if cleared:
+            await callback.message.edit_text(
+                f"✅ Cleared: <code>{'</code>, <code>'.join(cleared)}</code>",
+                parse_mode="HTML",
+                reply_markup=get_back_keyboard()
+            )
+        else:
+            await callback.answer("Nothing to clear.", show_alert=True)
         await callback.answer()
 
     elif action == "close":
