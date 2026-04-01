@@ -336,7 +336,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         await progress_callback(f"🎬 {funny_status}")
 
     # Prefer Cobalt on Heroku for Reddit (yt-dlp impersonate fails on Heroku)
-    if platform == "reddit" and IS_HEROKU and cobalt_client:
+    if platform == "reddit" and cobalt_client:
         try:
             logging.info(f"[COBALT] Heroku-first attempt for Reddit: {url}")
             file_path, thumb_path, metadata = await cobalt_client.download_media(
@@ -510,7 +510,7 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
     for attempt, user_agent in enumerate(USER_AGENTS, 1):
         # First try with impersonate, fallback to without if it fails
         impersonate_modes = [True, False]
-        if is_reddit and IS_HEROKU:
+        if is_reddit:
             # Avoid yt-dlp impersonate on Heroku (AssertionError from ImpersonateTarget)
             impersonate_modes = [False]
         for use_impersonate in impersonate_modes:

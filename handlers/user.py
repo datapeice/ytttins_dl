@@ -14,6 +14,7 @@ from database.storage import stats
 from services.logger import download_logger
 from config import DOWNLOADS_DIR
 from aiogram.types import InlineQueryResultArticle, InputTextMessageContent
+from services.metadata import fetch_song_metadata
 
 router = Router()
 url_cache = {}
@@ -99,11 +100,21 @@ async def cmd_start(message: types.Message):
         parse_mode='HTML'
     )
 
-@router.message(lambda m: m.text and m.text.lower().startswith('найти '))
+@router.message(Command("song"))
+@router.message(lambda m: m.text and (m.text.lower().startswith('найти ') or m.text.lower().startswith('/song')))
 async def handle_search(message: types.Message):
-    query = message.text[message.text.lower().index('найти ') + len('найти '):].strip()
+    text_lower = message.text.lower()
+    if text_lower.startswith('найти '):
+        query = message.text[text_lower.index('найти ') + len('найти '):].strip()
+    elif text_lower.startswith('/song '):
+        query = message.text[text_lower.index('/song ') + len('/song '):].strip()
+    elif text_lower.startswith('/song'):
+        query = message.text[len('/song'):].strip()
+    else:
+        query = ""
+
     if not query:
-        await message.answer("❌ Please provide a song name after 'найти'.")
+        await message.answer("❌ Please provide a song name.")
         return
 
     reply_kwargs = {}
@@ -130,26 +141,55 @@ async def handle_search(message: types.Message):
             except Exception:
                 pass
 
-    search_url = f"ytsearch1:{query}"
-
     try:
-        file_path, thumbnail_path, metadata = await download_media(search_url, is_music=True, progress_callback=update_status)
+        search_methods = [
+            ("vk", f"vksearch1:{query}"),
+            ("soundcloud", f"scsearch1:{query}"),
+            ("youtube", f"ytsearch1:{query} Original Release")
+        ]
+        
+        file_path, thumbnail_path, metadata = None, None, {}
+        successful_platform = "youtube"
+        last_error = None
+        search_url = search_methods[-1][1]
+        
+        for platform_name, s_url in search_methods:
+            try:
+                # Removed detailed platform search status to avoid spamming the user
+                file_path, thumbnail_path, metadata = await download_media(s_url, is_music=True, progress_callback=update_status)
+                
+                # Check if download was successful
+                if file_path and (isinstance(file_path, list) or file_path.exists()):
+                    successful_platform = platform_name
+                    search_url = s_url  # For later use in metadata/logging
+                    break
+            except Exception as e:
+                last_error = e
+                logging.info(f"Search failed on {platform_name}: {e}")
+                continue
+                
+        if not file_path:
+            raise last_error or Exception("All search methods failed.")
 
         display_name, stored_name, handle = resolve_user_identity(message.from_user)
         stats.add_active_user(message.from_user.id)
         video_url = metadata.get('webpage_url', search_url)
+        
+        if isinstance(file_path, list) and file_path:
+            file_path = file_path[0]
+            
         stats.add_download(
             content_type='Music',
             user_id=message.from_user.id,
             username=stored_name,
-            platform='youtube',
+            platform=successful_platform,
             url=video_url,
             title=file_path.stem
         )
 
         download_logger.info(
             f"User: {display_name} ({handle}, ID: {message.from_user.id}) | "
-            f"Platform: youtube | "
+            f"Platform: {successful_platform} | "
             f"Type: Music (search) | "
             f"Query: {query} | "
             f"URL: {video_url}"
@@ -157,29 +197,46 @@ async def handle_search(message: types.Message):
 
         if file_path.exists():
             await update_status("📤 Uploading to Telegram...")
-            caption = format_caption(metadata, 'youtube', video_url)
+            caption = format_caption(metadata, successful_platform, video_url)
+            
+            # Fetch rich song metadata from iTunes API
+            rich_meta = await fetch_song_metadata(query)
+            
+            # Override thumbnail with high-res cover if available
+            local_cover_path_str = rich_meta.get("local_cover_path")
+            if local_cover_path_str and Path(local_cover_path_str).exists():
+                thumbnail_path = Path(local_cover_path_str)
+                
+            audio_kwargs = {
+                "audio": types.FSInputFile(file_path),
+                "duration": int(metadata.get('duration', 0)),
+                "caption": caption,
+                "parse_mode": "HTML",
+                **reply_kwargs
+            }
+            
+            if thumbnail_path and thumbnail_path.exists():
+                audio_kwargs["thumbnail"] = types.FSInputFile(thumbnail_path)
+            if rich_meta.get("title"):
+                audio_kwargs["title"] = rich_meta["title"]
+            if rich_meta.get("artist"):
+                audio_kwargs["performer"] = rich_meta["artist"]
 
-            if thumbnail_path:
-                await message.answer_audio(
-                    types.FSInputFile(file_path),
-                    thumbnail=types.FSInputFile(thumbnail_path),
-                    duration=int(metadata.get('duration', 0)),
-                    caption=caption,
-                    parse_mode='HTML',
-                    **reply_kwargs
-                )
-            else:
-                await message.answer_audio(
-                    types.FSInputFile(file_path),
-                    duration=int(metadata.get('duration', 0)),
-                    caption=caption,
-                    parse_mode='HTML',
-                    **reply_kwargs
-                )
+            await message.answer_audio(**audio_kwargs)
 
             file_path.unlink()
             if thumbnail_path and thumbnail_path.exists():
-                thumbnail_path.unlink()
+                try:
+                    thumbnail_path.unlink()
+                except Exception:
+                    pass
+            # Clean up the alternative cover just in case
+            if local_cover_path_str and Path(local_cover_path_str).exists():
+                try:
+                    Path(local_cover_path_str).unlink()
+                except Exception:
+                    pass
+                    
             if status_message:
                 await status_message.delete()
         else:
@@ -215,7 +272,7 @@ async def handle_search(message: types.Message):
             await message.answer(user_error, parse_mode='Markdown', **reply_kwargs)
 
 
-@router.message(lambda m: m.text and not m.text.startswith(('/start', '/panel', '/whitelist', '/unwhitelist', 'add @')) and not m.text.lower().startswith('найти '))
+@router.message(lambda m: m.text and not m.text.startswith(('/start', '/panel', '/whitelist', '/unwhitelist', 'add @', '/song')) and not m.text.lower().startswith('найти '))
 async def handle_url(message: types.Message):
     # Accept any URL-like string
     url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
