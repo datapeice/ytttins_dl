@@ -104,7 +104,7 @@ async def cmd_start(message: types.Message):
         "- Pinterest\n"
         "- VK / Dailymotion\n"
         "- And 1800+ other sites!\n\n"
-        "🔍 <b>Song search:</b> Start your message with <code>найти</code> followed by the song name to search and download it as MP3.\n"
+        "🔍 <b>Song search:</b> Start your message with <code>найти</code> followed by the song name to search and download it.\n"
         "Example: <code>найти Smells Like Teen Spirit</code>\n\n"
         "Developed by @datapeice",
         parse_mode='HTML'

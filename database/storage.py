@@ -280,4 +280,22 @@ class Stats:
                 'active_groups': list(self.active_groups)
             }
 
+    def remove_history_entry(self, history_id: int) -> bool:
+        if self.Session:
+            try:
+                with self.Session() as session:
+                    entry = session.query(DownloadHistory).filter_by(id=history_id).first()
+                    if entry:
+                        session.delete(entry)
+                        session.commit()
+                        return True
+                    return False
+            except Exception as e:
+                logging.error(f"Error removing history entry from DB: {e}")
+                return False
+        else:
+            # File fallback for history is a text log, not easily removable by ID
+            # In file mode, we just return False for now or recommend manually editing logs/downloads.log
+            return False
+
 stats = Stats()

@@ -54,6 +54,9 @@ def format_history_username(username: str) -> str:
 class BroadcastStates(StatesGroup):
     waiting_for_message = State()
 
+class DeleteHistoryStates(StatesGroup):
+    waiting_for_id = State()
+
 def get_back_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Back", callback_data="admin:back")]
@@ -240,7 +243,7 @@ async def handle_broadcast_confirm(callback: types.CallbackQuery, state: FSMCont
             pass
 
 @router.callback_query(F.data.startswith("admin:"))
-async def handle_admin_callback(callback: types.CallbackQuery):
+async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.username != ADMIN_USER_ID:
         await callback.answer("You don't have permission to use these controls.", show_alert=True)
         return
@@ -318,6 +321,24 @@ async def handle_admin_callback(callback: types.CallbackQuery):
         # Let the separate handler deal with this
         pass
         
+    elif action == "delete_history":
+        if not stats.Session:
+            await callback.answer("❌ This feature is only available in Database Mode.", show_alert=True)
+            return
+            
+        await callback.message.answer(
+            "🗑 *Delete History Entry*\n\n"
+            "Please send the *ID* of the download you want to delete.\n"
+            "You can find IDs next to entries in the history list.\n\n"
+            "Send /cancel to cancel.",
+            parse_mode="Markdown"
+        )
+        await state.set_state(DeleteHistoryStates.waiting_for_id)
+        try:
+            await callback.answer()
+        except:
+            pass
+        
     elif action.startswith("history"):
         page = 0
         if ":" in action:
@@ -349,7 +370,7 @@ async def handle_admin_callback(callback: types.CallbackQuery):
                             label = h.title if h.title else platform
                             safe_label = str(label).replace('[', '').replace(']', '')
 
-                            text += f"`{date_str}` | {display_username} | [{safe_label}]({url})\n"
+                            text += f"`{h.id}` | `{date_str}` | {display_username} | [{safe_label}]({url})\n"
                         
                         buttons = []
                         if page > 0:
@@ -359,6 +380,7 @@ async def handle_admin_callback(callback: types.CallbackQuery):
                         
                         keyboard = InlineKeyboardMarkup(inline_keyboard=[
                             buttons,
+                            [InlineKeyboardButton(text="🗑 Delete by ID", callback_data="admin:delete_history")],
                             [InlineKeyboardButton(text="🔙 Back", callback_data="admin:back")]
                         ])
             except Exception as e:
@@ -647,3 +669,21 @@ async def process_broadcast(message: types.Message, state: FSMContext):
         parse_mode="Markdown",
         reply_markup=keyboard
     )
+
+@router.message(DeleteHistoryStates.waiting_for_id)
+async def process_history_delete(message: types.Message, state: FSMContext):
+    if message.from_user.username != ADMIN_USER_ID:
+        return
+    
+    id_text = message.text.strip()
+    if not id_text.isdigit():
+        await message.answer("❌ Invalid ID. Please send a numeric ID.")
+        return
+    
+    history_id = int(id_text)
+    
+    if stats.remove_history_entry(history_id):
+        await message.answer(f"✅ History record #`{history_id}` has been permanently deleted.", parse_mode="Markdown")
+        await state.clear()
+    else:
+        await message.answer(f"❌ Record #`{history_id}` not found or could not be deleted.")
