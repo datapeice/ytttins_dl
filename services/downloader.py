@@ -288,6 +288,43 @@ def _cleanup_extra_files(files: List[Path], keep: Path) -> None:
 async def download_media(url: str, is_music: bool = False, video_height: int = None, progress_callback: Optional[Callable] = None, min_duration: int = 0) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
     logging.info(f"Using yt-dlp version: {yt_dlp.version.__version__}")
 
+    # Manage cycling funny statuses every 3 seconds
+    status_task = None
+    if progress_callback:
+        current_funny = random.choice(FUNNY_STATUSES)
+        last_progress = ""
+
+        async def wrapped_callback(text: str = ""):
+            nonlocal last_progress
+            if text:
+                # Clean up output for cleaner look
+                last_progress = text.replace("[download] ", "").replace("[ExtractAudio] ", "").strip()
+            
+            display_text = f"🎬 {current_funny}"
+            if last_progress:
+                display_text += f"\n📊 {last_progress}"
+            
+            try:
+                await progress_callback(display_text)
+            except Exception:
+                pass
+
+        async def status_cycler():
+            nonlocal current_funny
+            while True:
+                try:
+                    await asyncio.sleep(3)
+                    current_funny = random.choice(FUNNY_STATUSES)
+                    await wrapped_callback()
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    await asyncio.sleep(3)
+
+        status_task = asyncio.create_task(status_cycler())
+        # Show first status immediately
+        await wrapped_callback()
+
     async def maybe_add_instagram_audio(files: List[Path]) -> List[Path]:
         if not cobalt_client:
             return files
@@ -296,7 +333,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 url=url,
                 quality="1080",
                 is_audio=True,
-                progress_callback=progress_callback
+                progress_callback=wrapped_callback if progress_callback else None
             )
             if audio_path:
                 if isinstance(audio_path, list):
@@ -332,41 +369,6 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     if '?' in url and platform not in ("youtube", "instagram", "pornhub"):
         url = url.split('?')[0]
     
-    # Manage cycling funny statuses every 3 seconds
-    status_task = None
-    if progress_callback:
-        current_funny = random.choice(FUNNY_STATUSES)
-        last_progress = ""
-
-        async def wrapped_callback(text: str = ""):
-            nonlocal last_progress
-            if text:
-                # Clean up output for cleaner look
-                last_progress = text.replace("[download] ", "").replace("[ExtractAudio] ", "").strip()
-            
-            display_text = f"🎬 {current_funny}"
-            if last_progress:
-                display_text += f"\n📊 {last_progress}"
-            
-            try:
-                await progress_callback(display_text)
-            except Exception:
-                pass
-
-        async def status_cycler():
-            nonlocal current_funny
-            while True:
-                try:
-                    await asyncio.sleep(3)
-                    current_funny = random.choice(FUNNY_STATUSES)
-                    await wrapped_callback()
-                except asyncio.CancelledError:
-                    break
-                except Exception:
-                    await asyncio.sleep(3)
-
-        status_task = asyncio.create_task(status_cycler())
-
     try:
         # Prefer Cobalt on Heroku for Reddit (yt-dlp impersonate fails on Heroku)
         if platform == "reddit" and cobalt_client:
@@ -376,7 +378,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                     url=url,
                     quality="1080",
                     is_audio=is_music,
-                    progress_callback=progress_callback
+                    progress_callback=wrapped_callback if progress_callback else None
                 )
                 if file_path:
                     if isinstance(file_path, list):
@@ -400,7 +402,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 enrich_task = asyncio.create_task(asyncio.to_thread(fetch_tiktok_metadata, url))
                 
                 # Always use tiktok_local first
-                res = await _download_local_tiktok(url)
+                res = await _download_local_tiktok(url, progress_callback=wrapped_callback if progress_callback else None)
                 
                 # Enrich metadata with verification for TikTok ALWAYS
                 if res and len(res) == 3:
@@ -437,7 +439,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 return res
             
             # YouTube/Instagram/музыка через универсальный метод
-            return await _download_local_ytdlp(url, is_music, video_height=video_height, min_duration=min_duration)
+            return await _download_local_ytdlp(url, is_music, video_height=video_height, min_duration=min_duration, progress_callback=wrapped_callback if progress_callback else None)
             
         except Exception as e:
             ytdlp_error = str(e)
@@ -451,7 +453,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                     url=url,
                     quality="1080",
                     is_audio=is_music,
-                    progress_callback=progress_callback
+                    progress_callback=wrapped_callback if progress_callback else None
                 )
                 if file_path:
                     if isinstance(file_path, list):
@@ -472,10 +474,10 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 
                 # TikTok через специальный метод с прокси
                 if platform == "tiktok":
-                    return await _download_local_tiktok(url, use_proxy=True)
+                    return await _download_local_tiktok(url, use_proxy=True, progress_callback=wrapped_callback if progress_callback else None)
                 
                 # YouTube/Instagram/музыка с прокси
-                return await _download_local_ytdlp(url, is_music, video_height=video_height, use_proxy=True)
+                return await _download_local_ytdlp(url, is_music, video_height=video_height, use_proxy=True, progress_callback=wrapped_callback if progress_callback else None)
                 
             except Exception as proxy_error:
                 logging.warning(f"[YT-DLP+PROXY] ❌ Failed: {proxy_error}")
@@ -489,7 +491,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                     url=url,
                     quality="1080",
                     is_audio=is_music,
-                    progress_callback=progress_callback
+                    progress_callback=wrapped_callback if progress_callback else None
                 )
                 if file_path:
                     if isinstance(file_path, list):
@@ -517,7 +519,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         if status_task:
             status_task.cancel()
 
-async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: int = None, use_proxy: bool = False, min_duration: int = 0) -> Tuple[Path, Optional[Path], Dict]:
+async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: int = None, use_proxy: bool = False, min_duration: int = 0, progress_callback: Callable = None) -> Tuple[Path, Optional[Path], Dict]:
     """Универсальный метод для YouTube/Instagram/музыки через yt-dlp с retry на 403"""
     unique_id = uuid.uuid4().hex[:8]
     output_template = str(DOWNLOADS_DIR / f"%(title)s_%(id)s_{unique_id}.%(ext)s")
@@ -571,6 +573,16 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                             return f'Duration {duration}s is shorter than {min_duration}s'
                         return None
                     ydl_opts['match_filter'] = duration_filter
+                
+                if progress_callback:
+                    def ytdlp_hook(d):
+                        if d['status'] == 'downloading':
+                            p = d.get('_percent_str', '').replace('%','')
+                            s = d.get('_speed_str', '')
+                            t = d.get('_total_bytes_str', d.get('_total_bytes_estimate_str', ''))
+                            if p and s:
+                                asyncio.run_coroutine_threadsafe(progress_callback(f"{p}% of {t} at {s}"), asyncio.get_event_loop())
+                    ydl_opts['progress_hooks'] = [ytdlp_hook]
                 
                 # Расширенные HTTP-заголовки для имитации браузера
                 browser_headers = {
@@ -747,7 +759,7 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
     raise last_error if last_error else Exception("All user-agent attempts failed")
 
 
-async def _download_local_tiktok(url: str, use_proxy: bool = False) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
+async def _download_local_tiktok(url: str, use_proxy: bool = False, progress_callback: Callable = None) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
     """Скачивание TikTok на VPS. Поддерживает видео (h264) и фото-слайдшоу."""
     
     unique_id = uuid.uuid4().hex[:8]
@@ -792,6 +804,16 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False) -> Tuple[Uni
              return files, None, meta
         except Exception as e:
              logging.error(f"Custom scraper failed: {e}. Falling back to yt-dlp...")
+             if progress_callback:
+                 def ytdlp_hook(d):
+                     if d['status'] == 'downloading':
+                         p = d.get('_percent_str', '').replace('%','')
+                         s = d.get('_speed_str', '')
+                         t = d.get('_total_bytes_str', d.get('_total_bytes_estimate_str', ''))
+                         if p and s:
+                             asyncio.run_coroutine_threadsafe(progress_callback(f"{p}% of {t} at {s}"), asyncio.get_event_loop())
+                 ydl_opts_base['progress_hooks'] = [ytdlp_hook]
+             
              ydl_opts = ydl_opts_base.copy()
     else:
         # Strict legacy codec check for videos

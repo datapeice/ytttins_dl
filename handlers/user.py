@@ -382,18 +382,12 @@ async def handle_url(message: types.Message):
             await message.answer("Choose download format:", reply_markup=builder.as_markup(), **reply_kwargs)
             return
 
-        # Stealth mode: in groups, skip status messages and use a no-op callback
-        if is_group:
-            status_message = None
-            async def update_status(text: str):
+        status_message = await message.answer("⏳ Starting...", **reply_kwargs)
+        async def update_status(text: str):
+            try:
+                await status_message.edit_text(text)
+            except Exception:
                 pass
-        else:
-            status_message = await message.answer("⏳ Starting...", **reply_kwargs)
-            async def update_status(text: str):
-                try:
-                    await status_message.edit_text(text)
-                except Exception:
-                    pass
 
         is_music = is_youtube_music(target_url) or platform == "soundcloud"
         file_path, thumbnail_path, metadata = await download_media(target_url, is_music, progress_callback=update_status)
@@ -686,6 +680,9 @@ async def handle_format_selection(callback: types.CallbackQuery, bot: Bot):
                 if callback.inline_message_id:
                     media = types.InputMediaAudio(media=sent.audio.file_id, caption=caption, parse_mode='HTML')
                     await bot.edit_message_media(media=media, inline_message_id=callback.inline_message_id)
+                    # Delete from PM after sending to inline
+                    try: await sent.delete()
+                    except: pass
                 
                 file_path.unlink()
                 if thumbnail_path and thumbnail_path.exists():
@@ -792,6 +789,9 @@ async def handle_resolution_selection(callback: types.CallbackQuery, bot: Bot):
                 if callback.inline_message_id:
                     media = types.InputMediaVideo(media=sent.video.file_id, caption=caption, parse_mode='HTML')
                     await bot.edit_message_media(media=media, inline_message_id=callback.inline_message_id)
+                    # Delete from PM after sending to inline
+                    try: await sent.delete()
+                    except: pass
                 
                 file_path.unlink()
                 if thumbnail_path and thumbnail_path.exists():
@@ -966,6 +966,10 @@ async def inline_result_chosen(chosen_result: types.ChosenInlineResult, bot: Bot
 
             # Update the inline message with the media!
             await bot.edit_message_media(media=media, inline_message_id=inline_message_id)
+            
+            # Delete from PM after sending to inline
+            try: await sent.delete()
+            except: pass
             
             # Clean up
             file_path.unlink()

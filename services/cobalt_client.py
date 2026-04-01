@@ -197,8 +197,10 @@ class CobaltClient:
                             f.write(chunk)
                             downloaded += len(chunk)
                             
-                            # Обновляем прогресс
-                            # Keep download status message stable (funny status only)
+                            if progress_callback and total_size > 0:
+                                percent = int(downloaded * 100 / total_size)
+                                if percent % 5 == 0:  # Update every 5%
+                                    await progress_callback(f"{percent}%")
             
             if not file_path.exists() or file_path.stat().st_size == 0:
                 raise Exception("Downloaded file is empty or doesn't exist")
