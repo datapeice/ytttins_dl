@@ -575,13 +575,21 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     ydl_opts['match_filter'] = duration_filter
                 
                 if progress_callback:
+                    loop = asyncio.get_running_loop()
+                    last_update = 0
                     def ytdlp_hook(d):
+                        nonlocal last_update
                         if d['status'] == 'downloading':
+                            now = time.time()
+                            if now - last_update < 1:  # Throttle updates to 1 per second
+                                return
+                            
                             p = d.get('_percent_str', '').replace('%','')
                             s = d.get('_speed_str', '')
                             t = d.get('_total_bytes_str', d.get('_total_bytes_estimate_str', ''))
                             if p and s:
-                                asyncio.run_coroutine_threadsafe(progress_callback(f"{p}% of {t} at {s}"), asyncio.get_event_loop())
+                                last_update = now
+                                asyncio.run_coroutine_threadsafe(progress_callback(f"{p}% of {t} at {s}"), loop)
                     ydl_opts['progress_hooks'] = [ytdlp_hook]
                 
                 # Расширенные HTTP-заголовки для имитации браузера
@@ -805,13 +813,21 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False, progress_cal
         except Exception as e:
              logging.error(f"Custom scraper failed: {e}. Falling back to yt-dlp...")
              if progress_callback:
+                 loop = asyncio.get_running_loop()
+                 last_update = 0
                  def ytdlp_hook(d):
+                     nonlocal last_update
                      if d['status'] == 'downloading':
+                         now = time.time()
+                         if now - last_update < 1:  # Throttle updates to 1 per second
+                             return
+                         
                          p = d.get('_percent_str', '').replace('%','')
                          s = d.get('_speed_str', '')
                          t = d.get('_total_bytes_str', d.get('_total_bytes_estimate_str', ''))
                          if p and s:
-                             asyncio.run_coroutine_threadsafe(progress_callback(f"{p}% of {t} at {s}"), asyncio.get_event_loop())
+                             last_update = now
+                             asyncio.run_coroutine_threadsafe(progress_callback(f"{p}% of {t} at {s}"), loop)
                  ydl_opts_base['progress_hooks'] = [ytdlp_hook]
              
              ydl_opts = ydl_opts_base.copy()

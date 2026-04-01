@@ -13,7 +13,7 @@ from services.downloader import download_media, get_platform, is_youtube_music
 from database.storage import stats
 from services.logger import download_logger
 from config import DOWNLOADS_DIR
-from aiogram.types import InlineQueryResultArticle, InputTextMessageContent, InlineQuery, ChosenInlineResult, InputMediaVideo, InputMediaAudio
+from aiogram.types import InlineQueryResultArticle, InputTextMessageContent, InlineQuery, ChosenInlineResult, InputMediaVideo, InputMediaAudio, LabeledPrice, PreCheckoutQuery
 from services.metadata import fetch_song_metadata
 
 router = Router()
