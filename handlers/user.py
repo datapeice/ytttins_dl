@@ -855,7 +855,10 @@ async def inline_query_handler(inline_query: types.InlineQuery):
         description=f"Format: {platform} URL",
         input_message_content=InputTextMessageContent(
             message_text=url  # Sending the URL so chosen_result can pick it up
-        )
+        ),
+        reply_markup=InlineKeyboardBuilder().add(
+            InlineKeyboardButton(text="⏳", callback_data="none")
+        ).as_markup()
     )
     
     await inline_query.answer(results=[item], cache_time=300, is_personal=False)
@@ -867,6 +870,7 @@ async def inline_result_chosen(chosen_result: types.ChosenInlineResult, bot: Bot
     inline_message_id = chosen_result.inline_message_id
     
     if not inline_message_id:
+        logging.warning("No inline_message_id provided. Ensure result has a reply_markup.")
         return
 
     # Extract clean URL
