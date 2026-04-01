@@ -207,6 +207,8 @@ def get_platform(url: str) -> str:
         return "pinterest"
     elif "vk.com" in url_lower or "vk.ru" in url_lower:
         return "vk"
+    elif "soundcloud.com" in url_lower:
+        return "soundcloud"
     elif "dailymotion.com" in url_lower or "dai.ly" in url_lower:
         return "dailymotion"
     elif "pornhub.com" in url_lower:

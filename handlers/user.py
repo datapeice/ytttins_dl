@@ -8,12 +8,12 @@ from pathlib import Path
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import InlineKeyboardButton
+from aiogram.types import InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from services.downloader import download_media, get_platform, is_youtube_music
 from database.storage import stats
 from services.logger import download_logger
 from config import DOWNLOADS_DIR
-from aiogram.types import InlineQueryResultArticle, InputTextMessageContent
+from aiogram.types import InlineQueryResultArticle, InputTextMessageContent, InlineQuery, ChosenInlineResult, InputMediaVideo, InputMediaAudio
 from services.metadata import fetch_song_metadata
 
 router = Router()
@@ -92,6 +92,17 @@ async def probe_media_duration_seconds(media_path: Path) -> int:
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="🔍 Search Song"),
+                KeyboardButton(text="🔍 Найти песню")
+            ]
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Type 'search <song name>' or click a button"
+    )
+    
     await message.answer(
         "Hello! Send me a link to download video from:\n"
         "- YouTube / YouTube Music 🎵\n"
@@ -105,18 +116,34 @@ async def cmd_start(message: types.Message):
         "- Pinterest\n"
         "- VK / Dailymotion\n"
         "- And 1800+ other sites!\n\n"
-        "🔍 <b>Song search:</b> Start your message with <code>найти</code> followed by the song name to search and download it as MP3.\n"
-        "Example: <code>найти Smells Like Teen Spirit</code>\n\n"
+        "🔍 <b>Song search:</b> Start your message with <code>search</code> or <code>найти</code> followed by the song name.\n"
+        "Example: <code>search Smells Like Teen Spirit</code>\n\n"
         "Developed by @datapeice",
-        parse_mode='HTML'
+        parse_mode='HTML',
+        reply_markup=kb
     )
 
 @router.message(Command("song"))
-@router.message(lambda m: m.text and (m.text.lower().startswith('найти ') or m.text.lower().startswith('/song')))
+@router.message(lambda m: m.text and (
+    m.text.lower().startswith('найти ') or 
+    m.text.lower().startswith('search ') or 
+    m.text.lower().startswith('/song') or
+    m.text in ["🔍 Search Song", "🔍 Найти песню"]
+))
 async def handle_search(message: types.Message):
     text_lower = message.text.lower()
+    
+    if message.text == "🔍 Search Song":
+        await message.answer("Please type <code>search </code> followed by the song name.\nExample: <code>search Linkin Park Numb</code>", parse_mode='HTML')
+        return
+    if message.text == "🔍 Найти песню":
+        await message.answer("Пожалуйста, напишите <code>найти </code> и название песни.\nПример: <code>найти Виктор Цой Группа крови</code>", parse_mode='HTML')
+        return
+
     if text_lower.startswith('найти '):
         query = message.text[text_lower.index('найти ') + len('найти '):].strip()
+    elif text_lower.startswith('search '):
+        query = message.text[text_lower.index('search ') + len('search '):].strip()
     elif text_lower.startswith('/song '):
         query = message.text[text_lower.index('/song ') + len('/song '):].strip()
     elif text_lower.startswith('/song'):
@@ -368,7 +395,7 @@ async def handle_url(message: types.Message):
                 except Exception:
                     pass
 
-        is_music = is_youtube_music(target_url)
+        is_music = is_youtube_music(target_url) or platform == "soundcloud"
         file_path, thumbnail_path, metadata = await download_media(target_url, is_music, progress_callback=update_status)
 
         # Determine title based on file_path type
@@ -583,35 +610,47 @@ async def handle_url(message: types.Message):
             await message.answer(user_error, parse_mode='Markdown' if '```' in user_error else None, **reply_kwargs)
 
 @router.callback_query(F.data.startswith("format:"))
-async def handle_format_selection(callback: types.CallbackQuery):
+async def handle_format_selection(callback: types.CallbackQuery, bot: Bot):
     try:
         await callback.answer()
         _, format_type, request_id = callback.data.split(":", 2)
         
         url = url_cache.get(request_id)
         if not url:
-            await callback.message.edit_text("⚠️ Request expired. Please send the link again.")
+            error_text = "⚠️ Request expired. Please send the link again."
+            if callback.inline_message_id:
+                await bot.edit_message_text(error_text, inline_message_id=callback.inline_message_id)
+            else:
+                await callback.message.edit_text(error_text)
             return
 
         if format_type == "video":
             builder = InlineKeyboardBuilder()
             resolutions = [("1080p", 1080), ("720p", 720), ("480p", 480), ("360p", 360)]
-
             for label, height in resolutions:
-                builder.add(InlineKeyboardButton(
-                    text=label,
-                    callback_data=f"dl_res:{request_id}:{height}"
-                ))
+                builder.add(InlineKeyboardButton(text=label, callback_data=f"dl_res:{request_id}:{height}"))
             builder.adjust(2)
             
-            await callback.message.edit_text("Select video quality:", reply_markup=builder.as_markup())
+            prompt_text = "Select video quality:"
+            if callback.inline_message_id:
+                await bot.edit_message_text(prompt_text, inline_message_id=callback.inline_message_id, reply_markup=builder.as_markup())
+            else:
+                await callback.message.edit_text(prompt_text, reply_markup=builder.as_markup())
             return
 
-        status_message = await callback.message.edit_text("⏳ Starting...")
+        # Audio Path
+        start_text = "⏳ Starting..."
+        if callback.inline_message_id:
+            await bot.edit_message_text(start_text, inline_message_id=callback.inline_message_id)
+        else:
+            await callback.message.edit_text(start_text)
         
         async def update_status(text: str):
             try:
-                await status_message.edit_text(text)
+                if callback.inline_message_id:
+                    await bot.edit_message_text(text, inline_message_id=callback.inline_message_id)
+                else:
+                    await callback.message.edit_text(text)
             except Exception:
                 pass
         
@@ -627,93 +666,81 @@ async def handle_format_selection(callback: types.CallbackQuery):
                 username=stored_name,
                 platform='youtube',
                 url=url,
-                title=file_path.stem
+                title=file_path.stem if not isinstance(file_path, list) else metadata.get('title', 'Media')
             )
 
             user_id = callback.from_user.id
-            download_logger.info(
-                f"User: {display_name} ({handle}, ID: {user_id}) | "
-                f"Platform: youtube | "
-                f"Type: Audio | "
-                f"URL: {url}"
-            )
-
             if file_path.exists():
                 await update_status("📤 Uploading to Telegram...")
-                
                 caption = format_caption(metadata, 'youtube', url, is_music=is_music)
 
-                if thumbnail_path:
-                    await callback.message.answer_audio(
-                        types.FSInputFile(file_path), 
-                        thumbnail=types.FSInputFile(thumbnail_path),
-                        duration=int(metadata.get('duration', 0)),
-                        caption=caption,
-                        parse_mode='HTML'
-                    )
-                else:
-                    await callback.message.answer_audio(
-                        types.FSInputFile(file_path),
-                        duration=int(metadata.get('duration', 0)),
-                        caption=caption,
-                        parse_mode='HTML'
-                    )
+                sent = await bot.send_audio(
+                    user_id,
+                    types.FSInputFile(file_path),
+                    thumbnail=types.FSInputFile(thumbnail_path) if thumbnail_path else None,
+                    duration=int(metadata.get('duration', 0)),
+                    caption=caption,
+                    parse_mode='HTML'
+                )
+                
+                if callback.inline_message_id:
+                    media = types.InputMediaAudio(media=sent.audio.file_id, caption=caption, parse_mode='HTML')
+                    await bot.edit_message_media(media=media, inline_message_id=callback.inline_message_id)
                 
                 file_path.unlink()
                 if thumbnail_path and thumbnail_path.exists():
                     thumbnail_path.unlink()
-                await status_message.delete()
+                
+                if not callback.inline_message_id:
+                    try: await callback.message.delete()
+                    except: pass
             else:
-                await status_message.edit_text("Sorry, something went wrong during download.")
+                await update_status("❌ Error: Download failed.")
 
         except Exception as e:
             error_msg = str(e)
-            logging.error(f"Error: {error_msg}")
+            logging.error(f"Error in audio selection: {error_msg}")
+            await update_status(f"❌ Error: {error_msg[:100]}")
             try:
-                if "file_path" in locals() and file_path:
+                if 'file_path' in locals() and file_path:
                     if isinstance(file_path, list):
                         for p in file_path:
                             if p.exists(): p.unlink()
                     elif file_path.exists(): file_path.unlink()
-                if "thumbnail_path" in locals() and thumbnail_path and thumbnail_path.exists(): thumbnail_path.unlink()
-            except Exception:
-                pass
-            
-            if "No working app info" in error_msg or "tiktok:sound" in error_msg:
-                user_error = "❌ TikTok sound/music links are not supported. Please send a video link."
-            elif "Unsupported URL" in error_msg:
-                user_error = "❌ This URL is not supported."
-            else:
-                user_error = (
-                    f"```error\n{error_msg}\n```\n\n"
-                    f"Contact with developer @datapeice"
-                )
-            
-            await status_message.edit_text(user_error, parse_mode='Markdown' if '```' in user_error else None)
+                if 'thumbnail_path' in locals() and thumbnail_path and thumbnail_path.exists():
+                    thumbnail_path.unlink()
+            except: pass
 
     except Exception as e:
-        logging.error(f"Error in callback handling: {str(e)}")
-        try:
-            await callback.message.answer("❌ Sorry, this request has expired. Please try again.")
-        except Exception:
-            pass
+        logging.error(f"Error in handle_format_selection: {str(e)}")
 
 @router.callback_query(F.data.startswith("dl_res:"))
-async def handle_resolution_selection(callback: types.CallbackQuery):
+async def handle_resolution_selection(callback: types.CallbackQuery, bot: Bot):
     try:
         await callback.answer()
         _, request_id, height = callback.data.split(":", 2)
         
         url = url_cache.get(request_id)
         if not url:
-            await callback.message.edit_text("⚠️ Request expired. Please send the link again.")
+            error_text = "⚠️ Request expired. Please send the link again."
+            if callback.inline_message_id:
+                await bot.edit_message_text(error_text, inline_message_id=callback.inline_message_id)
+            else:
+                await callback.message.edit_text(error_text)
             return
 
-        status_message = await callback.message.edit_text(f"⏳ Downloading video ({height}p)...")
+        start_text = f"⏳ Downloading video ({height}p)..."
+        if callback.inline_message_id:
+            await bot.edit_message_text(start_text, inline_message_id=callback.inline_message_id)
+        else:
+            await callback.message.edit_text(start_text)
         
         async def update_status(text: str):
             try:
-                await status_message.edit_text(text)
+                if callback.inline_message_id:
+                    await bot.edit_message_text(text, inline_message_id=callback.inline_message_id)
+                else:
+                    await callback.message.edit_text(text)
             except Exception:
                 pass
         
@@ -733,20 +760,12 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
                 username=stored_name,
                 platform='youtube',
                 url=url,
-                title=file_path.stem
+                title=file_path.stem if not isinstance(file_path, list) else metadata.get('title', 'Media')
             )
 
             user_id = callback.from_user.id
-            download_logger.info(
-                f"User: {display_name} ({handle}, ID: {user_id}) | "
-                f"Platform: youtube | "
-                f"Type: Video ({height}p) | "
-                f"URL: {url}"
-            )
-
             if file_path.exists():
                 await update_status("📤 Uploading to Telegram...")
-                
                 caption = format_caption(metadata, 'youtube', url, is_music=False)
 
                 duration_value = int(metadata.get('duration', 0))
@@ -768,167 +787,195 @@ async def handle_resolution_selection(callback: types.CallbackQuery):
                 if thumbnail_path:
                    video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
                 
-                logging.info(f"Sending video with kwargs: {video_kwargs}")
+                sent = await bot.send_video(user_id, **video_kwargs)
                 
-                # Measure upload time to Telegram
-                upload_start = time.time()
-                await callback.message.answer_video(**video_kwargs)
-                upload_time = time.time() - upload_start
-                file_size_mb = file_path.stat().st_size / (1024 * 1024)
-                logging.info(f"✅ Video uploaded to Telegram in {upload_time:.1f}s ({file_size_mb:.2f}MB, {file_size_mb/upload_time:.2f}MB/s)")
+                if callback.inline_message_id:
+                    media = types.InputMediaVideo(media=sent.video.file_id, caption=caption, parse_mode='HTML')
+                    await bot.edit_message_media(media=media, inline_message_id=callback.inline_message_id)
                 
                 file_path.unlink()
                 if thumbnail_path and thumbnail_path.exists():
                     thumbnail_path.unlink()
-                await status_message.delete()
+                
+                if not callback.inline_message_id:
+                    try: await callback.message.delete()
+                    except: pass
             else:
-                await status_message.edit_text("Sorry, something went wrong during download.")
+                await update_status("❌ Error: Download failed.")
 
         except Exception as e:
             error_msg = str(e)
-            logging.error(f"Error in video download: {error_msg}")
-            
-            if "No working app info" in error_msg or "tiktok:sound" in error_msg:
-                user_error = "❌ TikTok sound/music links are not supported. Please send a video link."
-            elif "Unsupported URL" in error_msg:
-                user_error = "❌ This URL is not supported."
-            else:
-                user_error = (
-                    f"```error\n{error_msg}\n```\n\n"
-                    f"Contact with developer @datapeice"
-                )
-            
-            await status_message.edit_text(user_error, parse_mode='Markdown' if '```' in user_error else None)
+            logging.error(f"Error in video resolution process: {error_msg}")
+            await update_status(f"❌ Error: {error_msg[:100]}")
+            try:
+                if 'file_path' in locals() and file_path:
+                    if isinstance(file_path, list):
+                        for p in file_path:
+                            if p.exists(): p.unlink()
+                    elif file_path.exists(): file_path.unlink()
+                if 'thumbnail_path' in locals() and thumbnail_path and thumbnail_path.exists():
+                    thumbnail_path.unlink()
+            except: pass
 
     except Exception as e:
-        logging.error(f"Error in resolution callback: {str(e)}")
+        logging.error(f"Error in handle_resolution_selection: {str(e)}")
 
 @router.inline_query()
 async def inline_query_handler(inline_query: types.InlineQuery):
     text = inline_query.query.strip()
+    
+    # URL pattern
     url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
     
+    # 1. If empty or not a URL, show "Paste a link"
     match = re.search(url_pattern, text)
-    if not match:
+    if not text or not match:
+        item = InlineQueryResultArticle(
+            id="paste_link_hint",
+            title="🔗 Paste a link / Отправьте ссылку",
+            description="Type or paste a link to download media",
+            input_message_content=InputTextMessageContent(
+                message_text="You need to provide a link to download media.\nExample: `@bot https://tiktok.com/...`"
+            )
+        )
+        await inline_query.answer(results=[item], cache_time=3600, is_personal=False)
         return
         
+    # 2. Recognized URL
     url = match.group(0)
+    platform = get_platform(url)
     
-    article_result = InlineQueryResultArticle(
-        id=str(uuid.uuid4()),
-        title="📥 Скачать медиа / Download media",
-        description=f"Нажмите, чтобы отправить ссылку (фоновая загрузка)",
+    # Store in cache for chosen_result handler
+    request_id = str(uuid.uuid4())[:8]
+    url_cache[request_id] = url
+    
+    item = InlineQueryResultArticle(
+        id=f"dl:{request_id}",
+        title="select download type",
+        description=f"Format: {platform} URL",
         input_message_content=InputTextMessageContent(
-            message_text=url
+            message_text=url  # Sending the URL so chosen_result can pick it up
         )
     )
-    try:
-        from yt_dlp import YoutubeDL
-        import asyncio
-        import random
-        
-        def get_yt_dlp_url():
-            opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'skip_download': True,
-                'format': 'best',
-                'http_headers': {
-                    'User-Agent': random.choice([
-                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0'
-                    ])
-                }
-            }
-            with YoutubeDL(opts) as ydl:
-                return ydl.extract_info(url, download=False)
-
-        info = await asyncio.wait_for(asyncio.to_thread(get_yt_dlp_url), timeout=5.0)
-        
-        if info and info.get('url'):
-            direct_url = info['url']
-            thumb = info.get('thumbnail', direct_url)
-            title = info.get('title', 'Video')
-            
-            video_result = types.InlineQueryResultVideo(
-                id=str(uuid.uuid4()),
-                title=f"🎬 Отправить {title}",
-                video_url=direct_url,
-                mime_type="video/mp4",
-                thumbnail_url=thumb,
-                description="Прямая отправка видео"
-            )
-            await inline_query.answer([video_result, article_result], cache_time=1, is_personal=False)
-            return
-
-    except Exception as e:
-        logging.warning(f"Inline yt_dlp extraction failed: {e}")
-
-    await inline_query.answer([article_result], cache_time=1, is_personal=False)
+    
+    await inline_query.answer(results=[item], cache_time=300, is_personal=False)
 
 @router.chosen_inline_result()
 async def inline_result_chosen(chosen_result: types.ChosenInlineResult, bot: Bot):
-    logging.warning(f"GOT CHOSEN INLINE: {chosen_result.query} from {chosen_result.from_user.id}")
+    """
+    This is triggered when the user picks the result.
+    We'll immediately edit the message to match the bot's regular behavior.
+    """
     url = chosen_result.query.strip()
-    url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
+    inline_message_id = chosen_result.inline_message_id
     
+    if not inline_message_id:
+        return
+
+    # Extract clean URL
+    url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
     match = re.search(url_pattern, url)
     if not match:
-        logging.warning("Chosen inline URL did not match regex")
         return
-        
     target_url = match.group(0)
-    user_id = chosen_result.from_user.id
     
+    platform = get_platform(target_url)
+    
+    # YouTube Path: Show selection buttons (match regular bot)
+    if platform == "youtube" and not is_youtube_music(target_url):
+        request_id = str(uuid.uuid4())[:8]
+        url_cache[request_id] = target_url
+        
+        builder = InlineKeyboardBuilder()
+        builder.add(
+            InlineKeyboardButton(text="🎵 Audio (MP3)", callback_data=f"format:audio:{request_id}"),
+            InlineKeyboardButton(text="🎥 Video", callback_data=f"format:video:{request_id}")
+        )
+        await bot.edit_message_text(
+            text="Choose download format:",
+            inline_message_id=inline_message_id,
+            reply_markup=builder.as_markup()
+        )
+        return
+
+    # Other Platforms Path: Start download immediately
+    await bot.edit_message_text(
+        text="downloading...",
+        inline_message_id=inline_message_id
+    )
+    
+    # We call the same internal logic that handle_url uses
+    # But since it's an inline message, we'll use a specialized helper or adapt.
+    # For now, let's trigger it directly.
     try:
-        # Send a status message privately
-        status_msg = await bot.send_message(user_id, f"📥 Загружаю видео по вашей inline-ссылке...\n{target_url}")
+        # Resolve music vs video for autodownload
+        is_music = is_youtube_music(target_url) or platform == "soundcloud"
         
         async def update_status(text: str):
             try:
-                await status_msg.edit_text(text)
-            except:
-                pass
+                await bot.edit_message_text(text=text, inline_message_id=inline_message_id)
+            except: pass
 
-        is_music = is_youtube_music(target_url)
         file_path, thumbnail_path, metadata = await download_media(target_url, is_music, progress_callback=update_status)
         
-        platform = get_platform(target_url)
-        caption = format_caption(metadata, platform, target_url)
+        await update_status("📤 uploading...")
         
-        if file_path and file_path.exists():
-            await update_status("📤 Отправляю готовое видео...")
-            
-            # Send the actual video
-            duration_value = int(metadata.get('duration', 0))
-            if duration_value <= 0:
-                 duration_value = await probe_media_duration_seconds(file_path)
+        display_name, stored_name, handle = resolve_user_identity(chosen_result.from_user)
+        stats.add_active_user(chosen_result.from_user.id)
+        
+        user_id = chosen_result.from_user.id
+        caption = format_caption(metadata, platform, target_url, is_music=is_music)
 
-            video_kwargs = {
-                'video': types.FSInputFile(file_path),
-                'duration': duration_value,
-                'supports_streaming': True,
-                'caption': caption,
-                'parse_mode': 'HTML'
-            }
-            if metadata.get('width') and metadata.get('height'):
-                 video_kwargs['width'] = metadata.get('width')
-                 video_kwargs['height'] = metadata.get('height')
-            if thumbnail_path:
-                 video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
-                 
-            await bot.send_video(user_id, **video_kwargs)
+        # Slideshow check
+        if isinstance(file_path, list):
+             # Slideshows go to PM since we can't edit inline message to media group
+             await bot.send_message(user_id, "📤 uploading slideshow to your PM...")
+             # ... existing slideshow logic ...
+             image_exts = ['.jpg', '.jpeg', '.png', '.webp']
+             ordered_files = sorted(file_path, key=lambda p: p.name)
+             media_group = [types.InputMediaPhoto(media=types.FSInputFile(p), caption=caption if i == 0 else "", parse_mode='HTML' if i == 0 else None) for i, p in enumerate(ordered_files) if p.suffix.lower() in image_exts][:10]
+             if media_group:
+                 await bot.send_media_group(user_id, media_group)
+             
+             for p in file_path:
+                 try: p.unlink()
+                 except: pass
+             await update_status("✅ uploaded to PM!")
+             return
+
+        if file_path.exists():
+            if is_music:
+                sent = await bot.send_audio(
+                    user_id, 
+                    types.FSInputFile(file_path),
+                    thumbnail=types.FSInputFile(thumbnail_path) if thumbnail_path else None,
+                    caption=caption,
+                    parse_mode='HTML'
+                )
+                media = types.InputMediaAudio(media=sent.audio.file_id, caption=caption, parse_mode='HTML')
+            else:
+                sent = await bot.send_video(
+                    user_id,
+                    types.FSInputFile(file_path),
+                    thumbnail=types.FSInputFile(thumbnail_path) if thumbnail_path else None,
+                    caption=caption,
+                    parse_mode='HTML'
+                )
+                media = types.InputMediaVideo(media=sent.video.file_id, caption=caption, parse_mode='HTML')
+
+            # Update the inline message with the media!
+            await bot.edit_message_media(media=media, inline_message_id=inline_message_id)
             
-            # Cleanup
+            # Clean up
             file_path.unlink()
             if thumbnail_path and thumbnail_path.exists(): thumbnail_path.unlink()
-            await status_msg.delete()
         else:
-            await update_status("❌ Ошибка: Файл не скачался.")
+            await update_status("❌ Error: Download failed.")
+
     except Exception as e:
-        logging.error(f"Chosen inline result download error: {e}")
+        logging.error(f"Inline chosen download error: {e}")
         try:
-            await bot.send_message(user_id, f"❌ Ошибка скачивания: {e}")
+             await bot.edit_message_text(text=f"❌ Error: {str(e)[:100]}", inline_message_id=inline_message_id)
         except:
-            pass
+             pass
 
