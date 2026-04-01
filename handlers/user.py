@@ -92,36 +92,97 @@ async def probe_media_duration_seconds(media_path: Path) -> int:
 
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
-    kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text="🔍 Search Song"),
-                KeyboardButton(text="🔍 Найти песню")
-            ]
-        ],
-        resize_keyboard=True,
-        input_field_placeholder="Type 'search <song name>' or click a button"
+    display_name, stored_name, handle = resolve_user_identity(message.from_user)
+    stats.add_active_user(message.from_user.id)
+    
+    welcome_text = (
+        f"👋 <b>Привет, {display_name}!</b>\n\n"
+        "Я помогу тебе скачать видео и музыку из TikTok, YouTube, Instagram и других сервисов.\n\n"
+        "📎 <b>Просто отправь мне ссылку!</b>\n"
+        "🔍 Или используй меня в любом чате: <code>@ytttins_dl_bot &lt;ссылка&gt;</code>\n\n"
+        "⭐️ <b>Поддержать разработку:</b> /donate"
     )
     
-    await message.answer(
-        "Hello! Send me a link to download video from:\n"
-        "- YouTube / YouTube Music 🎵\n"
-        "- TikTok\n"
-        "- Instagram\n"
-        "- Twitter/X\n"
-        "- Reddit\n"
-        "- Facebook\n"
-        "- Vimeo\n"
-        "- Twitch\n"
-        "- Pinterest\n"
-        "- VK / Dailymotion\n"
-        "- And 1800+ other sites!\n\n"
-        "🔍 <b>Song search:</b> Start your message with <code>search</code> or <code>найти</code> followed by the song name.\n"
-        "Example: <code>search Smells Like Teen Spirit</code>\n\n"
-        "Developed by @datapeice",
-        parse_mode='HTML',
-        reply_markup=kb
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🔍 Search Song"), KeyboardButton(text="🔍 Найти песню")],
+            [KeyboardButton(text="⭐️ Поддержать")]
+        ],
+        resize_keyboard=True
     )
+    
+    await message.answer(welcome_text, reply_markup=kb, parse_mode='HTML')
+
+@router.message(F.text == "⭐️ Поддержать")
+@router.message(Command("donate"))
+async def handle_donate(message: types.Message):
+    """Отправляет меню для донатов звездами."""
+    text = (
+        "⭐️ <b>Поддержите разработку бота!</b>\n\n"
+        "Ваши донаты помогают оплачивать серверы и развивать новые функции. "
+        "Мы используем <b>Telegram Stars</b> — это официальный и безопасный способ поблагодарить разработчика.\n\n"
+        "💎 Звезды можно вывести через Fragment в TON, что делает ваш вклад максимально эффективным!\n\n"
+        "Выберите сумму для доната:"
+    )
+    
+    builder = InlineKeyboardBuilder()
+    builder.add(
+        InlineKeyboardButton(text="☕️ 50", callback_data="donate:50"),
+        InlineKeyboardButton(text="🥤 100", callback_data="donate:100"),
+        InlineKeyboardButton(text="🍔 250", callback_data="donate:250"),
+        InlineKeyboardButton(text="🍕 500", callback_data="donate:500"),
+        InlineKeyboardButton(text="💎 1000", callback_data="donate:1000")
+    )
+    builder.adjust(2)
+    
+    await message.answer(text, reply_markup=builder.as_markup(), parse_mode='HTML')
+
+@router.callback_query(F.data.startswith("donate:"))
+async def handle_donate_selection(callback: types.CallbackQuery, bot: Bot):
+    """Отправляет инвойс на выбранную сумму звезд."""
+    amount = int(callback.data.split(":")[1])
+    
+    # Титлы для разных сумм
+    titles = {
+        50: "Чашка кофе ☕️",
+        100: "Освежающий напиток 🥤",
+        250: "Вкусный бургер 🍔",
+        500: "Горячая пицца 🍕",
+        1000: "Бриллиантовый взнос 💎"
+    }
+    
+    title = titles.get(amount, "Благодарность разработчику")
+    
+    await bot.send_invoice(
+        chat_id=callback.from_user.id,
+        title=title,
+        description=f"Добровольное пожертвование в размере {amount} звезд для развития бота.",
+        payload=f"donate_{amount}_{callback.from_user.id}",
+        currency="XTR",
+        prices=[LabeledPrice(label=title, amount=amount)],
+        provider_token="" # Пусто для звезд
+    )
+    await callback.answer()
+
+@router.pre_checkout_query()
+async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery, bot: Bot):
+    """Подтверждает возможность оплаты."""
+    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+
+@router.message(F.successful_payment)
+async def process_successful_payment(message: types.Message):
+    """Благодарит пользователя за донат."""
+    payment = message.successful_payment
+    amount = payment.total_amount
+    
+    thanks_text = (
+        "💖 <b>Огромное спасибо за вашу поддержку!</b>\n\n"
+        f"Вы успешно задонатили <b>{amount} ⭐️</b>. "
+        "Это очень важно для нас! Мы продолжим делать бота лучше для вас.\n\n"
+        "✨ <i>Статус обновлен: Победитель по жизни!</i>"
+    )
+    
+    await message.answer(thanks_text, parse_mode='HTML')
 
 @router.message(Command("song"))
 @router.message(lambda m: m.text and (
