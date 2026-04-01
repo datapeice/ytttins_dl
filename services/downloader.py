@@ -551,7 +551,7 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     'noplaylist': True,  # Skip playlists
                     'max_filesize': 2048 * 1024 * 1024,  # 2GB limit for safety (Telegram max)
                     'external_downloader': 'aria2c',
-                    'external_downloader_args': ['--max-connection-per-server=16', '--split=16', '--min-split-size=1M'],
+                    'external_downloader_args': ['--max-connection-per-server=4', '--split=4', '--min-split-size=1M'],
                     'exec_before_download': [],  # Prevent PhantomJS usage
                     'extractor_args': {
                         'pornhub': {
@@ -659,8 +659,8 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                         try:
                             p_str = d.get('_percent_str', '0%').replace('%','').strip()
                             p = int(float(p_str))
-                            if p >= last_logged_percent + 10:
-                                last_logged_percent = (p // 10) * 10
+                            if p >= last_logged_percent + 2:
+                                last_logged_percent = (p // 2) * 2
                                 logging.info(f"[YT-DLP] Download progress: {p}% ({d.get('_speed_str', 'N/A')})")
                         except: pass
                 
