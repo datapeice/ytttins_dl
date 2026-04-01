@@ -105,8 +105,7 @@ async def cmd_start(message: types.Message):
     
     kb = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🔍 Search Song")],
-            [KeyboardButton(text="⭐️ Support")]
+            [KeyboardButton(text="🔍 Search Song"), KeyboardButton(text="⭐️ Support")]
         ],
         resize_keyboard=True
     )
