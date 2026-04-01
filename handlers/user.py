@@ -851,7 +851,7 @@ async def inline_query_handler(inline_query: types.InlineQuery):
     
     item = InlineQueryResultArticle(
         id=f"dl:{request_id}",
-        title="select download type",
+        title="Download video",
         description=f"Format: {platform} URL",
         input_message_content=InputTextMessageContent(
             message_text=url  # Sending the URL so chosen_result can pick it up
@@ -862,10 +862,7 @@ async def inline_query_handler(inline_query: types.InlineQuery):
 
 @router.chosen_inline_result()
 async def inline_result_chosen(chosen_result: types.ChosenInlineResult, bot: Bot):
-    """
-    This is triggered when the user picks the result.
-    We'll immediately edit the message to match the bot's regular behavior.
-    """
+    logging.info(f"Chosen inline result: {chosen_result.result_id} with query {chosen_result.query}")
     url = chosen_result.query.strip()
     inline_message_id = chosen_result.inline_message_id
     
