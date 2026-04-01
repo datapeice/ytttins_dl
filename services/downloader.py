@@ -518,7 +518,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
 async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: int = None, use_proxy: bool = False, min_duration: int = 0, progress_callback: Callable = None) -> Tuple[Path, Optional[Path], Dict]:
     """Универсальный метод для YouTube/Instagram/музыки через yt-dlp с retry на 403"""
     unique_id = uuid.uuid4().hex[:8]
-    output_template = str(DOWNLOADS_DIR / f"%(title)s_%(id)s_{unique_id}.%(ext)s")
+    output_template = str(DOWNLOADS_DIR / f"%(title).50s_%(id)s_{unique_id}.%(ext)s")
     cookie_file = DATA_DIR / "cookies.txt"
 
     is_reddit = "reddit.com" in url or "redd.it" in url
@@ -752,7 +752,7 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False, progress_cal
     """Скачивание TikTok на VPS. Поддерживает видео (h264) и фото-слайдшоу."""
     
     unique_id = uuid.uuid4().hex[:8]
-    output_template = str(DOWNLOADS_DIR / f"%(title)s_%(id)s_{unique_id}.%(ext)s")
+    output_template = str(DOWNLOADS_DIR / f"%(title).50s_%(id)s_{unique_id}.%(ext)s")
     cookie_file = DATA_DIR / "cookies.txt"
     
     # Check for slideshow (images)
