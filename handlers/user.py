@@ -7,6 +7,7 @@ import random
 import subprocess
 from pathlib import Path
 from aiogram import Router, types, F, Bot
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
@@ -26,6 +27,18 @@ def get_random_support_kb():
         builder.add(InlineKeyboardButton(text="⭐️ Support Bot ⭐️", callback_data="show_donate_menu"))
         return builder.as_markup()
     return None
+
+async def safe_edit_text(msg, text, max_retries=3, **kwargs):
+    """Edit message text with retry logic for Telegram flood control."""
+    for attempt in range(max_retries + 1):
+        try:
+            await msg.edit_text(text, **kwargs)
+            return
+        except TelegramRetryAfter as e:
+            if attempt == max_retries:
+                raise
+            logging.warning(f"Flood control on edit_text: sleeping for {e.retry_after}s (attempt {attempt + 1}/{max_retries})")
+            await asyncio.sleep(e.retry_after)
 
 def resolve_user_identity(user: types.User) -> tuple[str, str, str]:
     display_name = user.full_name or user.first_name or "Unknown"
@@ -391,7 +404,7 @@ async def handle_search(message: types.Message):
                 await status_message.delete()
         else:
             if status_message:
-                await status_message.edit_text("❌ Sorry, something went wrong during download.")
+                await safe_edit_text(status_message, "❌ Sorry, something went wrong during download.")
 
     except Exception as e:
         error_msg = str(e)
@@ -417,7 +430,7 @@ async def handle_search(message: types.Message):
             f"Contact with developer @datapeice"
         )
         if status_message:
-            await status_message.edit_text(user_error, parse_mode='Markdown')
+            await safe_edit_text(status_message, user_error, parse_mode='Markdown')
         else:
             await message.answer(user_error, parse_mode='Markdown', **reply_kwargs)
 
@@ -485,7 +498,7 @@ async def handle_url(message: types.Message):
             status_message = await message.answer("🎬 Starting...", **reply_kwargs)
             async def update_status(text: str):
                 try:
-                    await status_message.edit_text(text)
+                    await safe_edit_text(status_message, text)
                 except Exception:
                     pass
 
@@ -559,7 +572,6 @@ async def handle_url(message: types.Message):
                     chunk = media_group[i:i + chunk_size]
                     
                     # Retry logic for FloodControl
-                    from aiogram.exceptions import TelegramRetryAfter
                     for attempt in range(3):
                         try:
                             await message.answer_media_group(chunk, **reply_kwargs)
@@ -670,7 +682,7 @@ async def handle_url(message: types.Message):
                 await status_message.delete()
         else:
             if status_message:
-                await status_message.edit_text("Sorry, something went wrong during download.")
+                await safe_edit_text(status_message, "Sorry, something went wrong during download.")
     
     except Exception as e:
         error_msg = str(e)
@@ -703,7 +715,7 @@ async def handle_url(message: types.Message):
             )
         
         if status_message:
-            await status_message.edit_text(user_error, parse_mode='Markdown' if '```' in user_error else None)
+            await safe_edit_text(status_message, user_error, parse_mode='Markdown' if '```' in user_error else None)
         else:
             await message.answer(user_error, parse_mode='Markdown' if '```' in user_error else None, **reply_kwargs)
 
