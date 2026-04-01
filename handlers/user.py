@@ -96,33 +96,51 @@ async def cmd_start(message: types.Message):
     stats.add_active_user(message.from_user.id)
     
     welcome_text = (
-        f"👋 <b>Привет, {display_name}!</b>\n\n"
-        "Я помогу тебе скачать видео и музыку из TikTok, YouTube, Instagram и других сервисов.\n\n"
-        "📎 <b>Просто отправь мне ссылку!</b>\n"
-        "🔍 Или используй меня в любом чате: <code>@ytttins_dl_bot &lt;ссылка&gt;</code>\n\n"
-        "⭐️ <b>Поддержать разработку:</b> /donate"
+        f"👋 <b>Hello, {display_name}!</b>\n\n"
+        "I will help you download video and music from TikTok, YouTube, Instagram, and other services.\n\n"
+        "📎 <b>Just send me a link!</b>\n"
+        "🔍 Or use me in any chat: <code>@ytttins_dl_bot &lt;link&gt;</code>\n\n"
+        "⭐️ <b>Support development:</b> /donate"
     )
     
     kb = ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🔍 Search Song"), KeyboardButton(text="🔍 Найти песню")],
-            [KeyboardButton(text="⭐️ Поддержать")]
+            [KeyboardButton(text="🔍 Search Song")],
+            [KeyboardButton(text="⭐️ Support")]
         ],
         resize_keyboard=True
     )
     
     await message.answer(welcome_text, reply_markup=kb, parse_mode='HTML')
 
-@router.message(F.text == "⭐️ Поддержать")
+@router.message(F.text == "⭐️ Support")
 @router.message(Command("donate"))
-async def handle_donate(message: types.Message):
-    """Отправляет меню для донатов звездами."""
+async def handle_donate(message: types.Message, bot: Bot):
+    """Sends the Star donation menu or processes a custom amount."""
+    parts = message.text.split() if message.text else []
+    if len(parts) > 1 and parts[1].isdigit():
+        amount = int(parts[1])
+        if amount < 1 or amount > 10000:
+            await message.answer("Please specify a valid amount between 1 and 10000 stars.")
+            return
+            
+        await bot.send_invoice(
+            chat_id=message.from_user.id,
+            title="Custom Support ⭐️",
+            description=f"Voluntary donation of {amount} stars for bot development.",
+            payload=f"donate_{amount}_{message.from_user.id}",
+            currency="XTR",
+            prices=[LabeledPrice(label="Custom Support ⭐️", amount=amount)],
+            provider_token="" # Empty for stars
+        )
+        return
+
     text = (
-        "⭐️ <b>Поддержите разработку бота!</b>\n\n"
-        "Ваши донаты помогают оплачивать серверы и развивать новые функции. "
-        "Мы используем <b>Telegram Stars</b> — это официальный и безопасный способ поблагодарить разработчика.\n\n"
-        "💎 Звезды можно вывести через Fragment в TON, что делает ваш вклад максимально эффективным!\n\n"
-        "Выберите сумму для доната:"
+        "⭐️ <b>Support bot development!</b>\n\n"
+        "Your donations help pay for servers and develop new features. "
+        "We use <b>Telegram Stars</b> — this is the official and safe way to thank the developer.\n\n"
+        "💎 Stars can be withdrawn via Fragment to TON, making your contribution extremely valuable!\n\n"
+        "Choose an amount below, or type <code>/donate &lt;amount&gt;</code> for a custom amount:"
     )
     
     builder = InlineKeyboardBuilder()
@@ -139,57 +157,56 @@ async def handle_donate(message: types.Message):
 
 @router.callback_query(F.data.startswith("donate:"))
 async def handle_donate_selection(callback: types.CallbackQuery, bot: Bot):
-    """Отправляет инвойс на выбранную сумму звезд."""
+    """Sends the invoice for the selected amounts of stars."""
     amount = int(callback.data.split(":")[1])
     
-    # Титлы для разных сумм
+    # Tier titles
     titles = {
-        50: "Чашка кофе ☕️",
-        100: "Освежающий напиток 🥤",
-        250: "Вкусный бургер 🍔",
-        500: "Горячая пицца 🍕",
-        1000: "Бриллиантовый взнос 💎"
+        50: "Cup of coffee ☕️",
+        100: "Refreshing drink 🥤",
+        250: "Delicious burger 🍔",
+        500: "Hot pizza 🍕",
+        1000: "Diamond contribution 💎"
     }
     
-    title = titles.get(amount, "Благодарность разработчику")
+    title = titles.get(amount, "Developer appreciation")
     
     await bot.send_invoice(
         chat_id=callback.from_user.id,
         title=title,
-        description=f"Добровольное пожертвование в размере {amount} звезд для развития бота.",
+        description=f"Voluntary donation of {amount} stars for bot development.",
         payload=f"donate_{amount}_{callback.from_user.id}",
         currency="XTR",
         prices=[LabeledPrice(label=title, amount=amount)],
-        provider_token="" # Пусто для звезд
+        provider_token="" # Empty for stars
     )
     await callback.answer()
 
 @router.pre_checkout_query()
 async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery, bot: Bot):
-    """Подтверждает возможность оплаты."""
+    """Confirms checkout."""
     await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
 
 @router.message(F.successful_payment)
 async def process_successful_payment(message: types.Message):
-    """Благодарит пользователя за донат."""
+    """Thanks the user for donation."""
     payment = message.successful_payment
     amount = payment.total_amount
     
     thanks_text = (
-        "💖 <b>Огромное спасибо за вашу поддержку!</b>\n\n"
-        f"Вы успешно задонатили <b>{amount} ⭐️</b>. "
-        "Это очень важно для нас! Мы продолжим делать бота лучше для вас.\n\n"
-        "✨ <i>Статус обновлен: Победитель по жизни!</i>"
+        "💖 <b>Thank you so much for your support!</b>\n\n"
+        f"You have successfully donated <b>{amount} ⭐️</b>. "
+        "This is incredibly important to us! We will continue improving the bot for you.\n\n"
+        "✨ <i>Status updated: Winner in life!</i>"
     )
     
     await message.answer(thanks_text, parse_mode='HTML')
 
 @router.message(Command("song"))
 @router.message(lambda m: m.text and (
-    m.text.lower().startswith('найти ') or 
     m.text.lower().startswith('search ') or 
     m.text.lower().startswith('/song') or
-    m.text in ["🔍 Search Song", "🔍 Найти песню"]
+    m.text == "🔍 Search Song"
 ))
 async def handle_search(message: types.Message):
     text_lower = message.text.lower()
@@ -197,13 +214,8 @@ async def handle_search(message: types.Message):
     if message.text == "🔍 Search Song":
         await message.answer("Please type <code>search </code> followed by the song name.\nExample: <code>search Linkin Park Numb</code>", parse_mode='HTML')
         return
-    if message.text == "🔍 Найти песню":
-        await message.answer("Пожалуйста, напишите <code>найти </code> и название песни.\nПример: <code>найти Виктор Цой Группа крови</code>", parse_mode='HTML')
-        return
 
-    if text_lower.startswith('найти '):
-        query = message.text[text_lower.index('найти ') + len('найти '):].strip()
-    elif text_lower.startswith('search '):
+    if text_lower.startswith('search '):
         query = message.text[text_lower.index('search ') + len('search '):].strip()
     elif text_lower.startswith('/song '):
         query = message.text[text_lower.index('/song ') + len('/song '):].strip()
@@ -231,17 +243,9 @@ async def handle_search(message: types.Message):
 
     is_group = message.chat.type != 'private'
 
-    if is_group:
-        status_message = None
-        async def update_status(text: str):
-            pass
-    else:
-        status_message = await message.answer(f"🔍 Searching for: {query}...", **reply_kwargs)
-        async def update_status(text: str):
-            try:
-                await status_message.edit_text(text)
-            except Exception:
-                pass
+    status_message = None
+    async def update_status(text: str):
+        pass
 
     try:
         search_methods = [
@@ -443,12 +447,18 @@ async def handle_url(message: types.Message):
             await message.answer("Choose download format:", reply_markup=builder.as_markup(), **reply_kwargs)
             return
 
-        status_message = await message.answer("⏳ Starting...", **reply_kwargs)
-        async def update_status(text: str):
-            try:
-                await status_message.edit_text(text)
-            except Exception:
+        is_youtube = platform == "youtube" or 'youtu.be' in target_url or 'youtube.com' in target_url
+        if is_group and not is_youtube:
+            # Stealth mode for groups (no funny status messages)
+            async def update_status(text: str):
                 pass
+        else:
+            status_message = await message.answer("🎬 Starting...", **reply_kwargs)
+            async def update_status(text: str):
+                try:
+                    await status_message.edit_text(text)
+                except Exception:
+                    pass
 
         is_music = is_youtube_music(target_url) or platform == "soundcloud"
         file_path, thumbnail_path, metadata = await download_media(target_url, is_music, progress_callback=update_status)

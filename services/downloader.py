@@ -293,17 +293,10 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     status_task = None
     if progress_callback:
         current_funny = random.choice(FUNNY_STATUSES)
-        last_progress = ""
 
         async def wrapped_callback(text: str = ""):
-            nonlocal last_progress
-            if text:
-                # Clean up output for cleaner look
-                last_progress = text.replace("[download] ", "").replace("[ExtractAudio] ", "").strip()
-            
+            # We no longer show live percentage/speed to keep UI clean and fast
             display_text = f"🎬 {current_funny}"
-            if last_progress:
-                display_text += f"\n📊 {last_progress}"
             
             try:
                 await progress_callback(display_text)
@@ -325,6 +318,8 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         status_task = asyncio.create_task(status_cycler())
         # Show first status immediately
         await wrapped_callback()
+
+
 
     async def maybe_add_instagram_audio(files: List[Path]) -> List[Path]:
         if not cobalt_client:
@@ -575,23 +570,8 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                         return None
                     ydl_opts['match_filter'] = duration_filter
                 
-                if progress_callback:
-                    loop = asyncio.get_running_loop()
-                    last_update = 0
-                    def ytdlp_hook(d):
-                        nonlocal last_update
-                        if d['status'] == 'downloading':
-                            now = time.time()
-                            if now - last_update < 1:  # Throttle updates to 1 per second
-                                return
-                            
-                            p = d.get('_percent_str', '').replace('%','')
-                            s = d.get('_speed_str', '')
-                            t = d.get('_total_bytes_str', d.get('_total_bytes_estimate_str', ''))
-                            if p and s:
-                                last_update = now
-                                asyncio.run_coroutine_threadsafe(progress_callback(f"{p}% of {t} at {s}"), loop)
-                    ydl_opts['progress_hooks'] = [ytdlp_hook]
+                # No progress_hooks used here anymore to keep UI clean
+                ydl_opts['progress_hooks'] = []
                 
                 # Расширенные HTTP-заголовки для имитации браузера
                 browser_headers = {
