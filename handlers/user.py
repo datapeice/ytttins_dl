@@ -49,12 +49,12 @@ def format_caption(metadata: dict, platform: str, original_url: str = "") -> str
     # Only show uploader if it's not "Unknown", or if it's TikTok (where we want to show it anyway)
     if uploader.lower() != "unknown" or platform == "tiktok":
         caption = (
-            f"👤 {uploader} | <a href=\"{url}\">{title}</a>\n"
+            f"👤 {uploader} | {title} (<a href=\"{url}\">Link</a>)\n"
             f"Developed by @datapeice"
         )
     else:
         caption = (
-            f"<a href=\"{url}\">{title}</a>\n"
+            f"{title} (<a href=\"{url}\">Link</a>)\n"
             f"Developed by @datapeice"
         )
     return caption
@@ -156,8 +156,8 @@ async def handle_search(message: types.Message):
 
     try:
         search_methods = [
-            ("soundcloud", f"scsearch1:{query}"),
-            ("youtube", f"ytsearch1:{query} Original Release")
+            ("youtube", f"ytsearch1:{query} official audio"),
+            ("soundcloud", f"scsearch1:{query}")
         ]
         
         file_path, thumbnail_path, metadata = None, None, {}
@@ -168,7 +168,7 @@ async def handle_search(message: types.Message):
         for platform_name, s_url in search_methods:
             try:
                 # Removed detailed platform search status to avoid spamming the user
-                file_path, thumbnail_path, metadata = await download_media(s_url, is_music=True, progress_callback=update_status)
+                file_path, thumbnail_path, metadata = await download_media(s_url, is_music=True, progress_callback=update_status, min_duration=60)
                 
                 # Check if download was successful
                 if file_path and (isinstance(file_path, list) or file_path.exists()):
@@ -615,7 +615,7 @@ async def handle_format_selection(callback: types.CallbackQuery):
         
         try:
             is_music = True
-            file_path, thumbnail_path, metadata = await download_media(url, is_music, progress_callback=update_status)
+            file_path, thumbnail_path, metadata = await download_media(url, is_music, progress_callback=update_status, min_duration=60)
 
             display_name, stored_name, handle = resolve_user_identity(callback.from_user)
             stats.add_active_user(callback.from_user.id)

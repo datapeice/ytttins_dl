@@ -283,7 +283,7 @@ def _cleanup_extra_files(files: List[Path], keep: Path) -> None:
 
 # === Основная логика ===
 
-async def download_media(url: str, is_music: bool = False, video_height: int = None, progress_callback: Optional[Callable] = None) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
+async def download_media(url: str, is_music: bool = False, video_height: int = None, progress_callback: Optional[Callable] = None, min_duration: int = 0) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
     logging.info(f"Using yt-dlp version: {yt_dlp.version.__version__}")
 
     async def maybe_add_instagram_audio(files: List[Path]) -> List[Path]:
@@ -435,7 +435,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 return res
             
             # YouTube/Instagram/музыка через универсальный метод
-            return await _download_local_ytdlp(url, is_music, video_height=video_height)
+            return await _download_local_ytdlp(url, is_music, video_height=video_height, min_duration=min_duration)
             
         except Exception as e:
             ytdlp_error = str(e)
@@ -515,7 +515,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         if status_task:
             status_task.cancel()
 
-async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: int = None, use_proxy: bool = False) -> Tuple[Path, Optional[Path], Dict]:
+async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: int = None, use_proxy: bool = False, min_duration: int = 0) -> Tuple[Path, Optional[Path], Dict]:
     """Универсальный метод для YouTube/Instagram/музыки через yt-dlp с retry на 403"""
     unique_id = uuid.uuid4().hex[:8]
     output_template = str(DOWNLOADS_DIR / f"%(title)s_%(id)s_{unique_id}.%(ext)s")
@@ -561,6 +561,14 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     'remote_components': ['ejs:github'],
                     'fixup': 'never',  # Skip redundant container fixups
                 }
+
+                if min_duration > 0:
+                    def duration_filter(info_dict, *, incomplete):
+                        duration = info_dict.get('duration')
+                        if duration and duration < min_duration:
+                            return f'Duration {duration}s is shorter than {min_duration}s'
+                        return None
+                    ydl_opts['match_filter'] = duration_filter
                 
                 # Расширенные HTTP-заголовки для имитации браузера
                 browser_headers = {
