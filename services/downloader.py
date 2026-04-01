@@ -649,6 +649,21 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                         # Видео с H.264 кодеком
                         ydl_opts['format'] = 'bestvideo[vcodec^=h264]+bestaudio/bestvideo[vcodec^=avc]+bestaudio/bestvideo+bestaudio/best[vcodec^=h264]/best[vcodec^=avc]/best'
                 
+                # Add progress hook to log to console (so user sees life in docker logs)
+                last_logged_percent = -1
+                def console_progress_hook(d):
+                    nonlocal last_logged_percent
+                    if d['status'] == 'downloading':
+                        try:
+                            p_str = d.get('_percent_str', '0%').replace('%','').strip()
+                            p = int(float(p_str))
+                            if p >= last_logged_percent + 10:
+                                last_logged_percent = (p // 10) * 10
+                                logging.info(f"[YT-DLP] Download progress: {p}% ({d.get('_speed_str', 'N/A')})")
+                        except: pass
+                
+                ydl_opts['progress_hooks'] = [console_progress_hook]
+                
                 try:
                     info, prepared_name = await asyncio.to_thread(_run_ytdlp_extract, ydl_opts, url)
                 except Exception as extract_error:
@@ -694,8 +709,20 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                 _cleanup_extra_files(downloaded_files, file_path)
                 
                 if file_path.suffix == '.unknown_video':
-                    file_path.unlink()
-                    raise ValueError("Downloaded file is an invalid or unsupported format (.unknown_video)")
+                    fsize = file_path.stat().st_size
+                    if fsize < 500 * 1024: # Less than 500KB - likely a placeholder/error page
+                        file_path.unlink()
+                        raise ValueError(f"Downloaded file is too small ({fsize/1024:.1f}KB) and has unknown format.")
+                    else:
+                        logging.info(f"Allowing .unknown_video file due to significant size: {fsize/1024/1024:.1f}MB")
+                        # Rename it to .mp4 so Telegram shows it correctly
+                        new_path = file_path.with_suffix('.mp4')
+                        try:
+                            file_path.rename(new_path)
+                            file_path = new_path
+                            logging.info(f"Renamed .unknown_video to {file_path.name} for better Telegram compatibility")
+                        except Exception as rename_err:
+                            logging.error(f"Failed to rename .unknown_video: {rename_err}")
                 
                 logging.info(f"Downloaded: {file_path.name}")
                 
