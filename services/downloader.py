@@ -622,8 +622,8 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     ydl_opts['proxy'] = ''
                 
                 if is_music:
-                    # Только аудио
-                    ydl_opts['format'] = 'bestaudio/best'
+                    # Только аудио (приоритет форматов без конвертации для скорости)
+                    ydl_opts['format'] = 'bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio/best'
                     ydl_opts['postprocessors'] = [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
