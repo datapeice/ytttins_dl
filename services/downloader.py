@@ -39,7 +39,7 @@ def generate_video_thumbnail(video_path: Path, output_path: Path) -> bool:
             "-ss", "00:00:01",
             "-i", str(video_path),
             "-vframes", "1",
-            "-vf", "scale=w=320:h=320:force_original_aspect_ratio=decrease",
+            "-vf", "format=yuv420p,scale=w=320:h=320:force_original_aspect_ratio=decrease",
             "-q:v", "2",
             str(output_path)
         ]
