@@ -238,7 +238,7 @@ def unshorten_reddit_url(url: str, proxy_url: Optional[str]) -> str:
     try:
         response = requests.head(url, proxies=proxies, headers=headers, allow_redirects=True, timeout=10)
         final_url = response.url
-        if final_url and "/s/" in final_url:
+        if final_url and ("/s/" in final_url):
             response = requests.get(url, proxies=proxies, headers=headers, allow_redirects=True, timeout=10)
             final_url = response.url
         if final_url and "?" in final_url:
@@ -359,7 +359,13 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                     current_funny = random.choice(FUNNY_STATUSES)
                     await wrapped_callback()
                 except asyncio.CancelledError:
-                    br    try:
+                    break
+                except Exception:
+                    await asyncio.sleep(3)
+
+        status_task = asyncio.create_task(status_cycler())
+
+    try:
         # Prefer Cobalt on Heroku for Reddit (yt-dlp impersonate fails on Heroku)
         if platform == "reddit" and cobalt_client:
             try:
@@ -507,20 +513,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         raise Exception(f"All download methods failed. YT-DLP error: {ytdlp_error}")
     finally:
         if status_task:
-            status_task.cancel()�я TikTok) ===
-    if platform == "tiktok":
-        try:
-            logging.info("[TIKWM] Attempting download...")
-            return await _download_tiktok_tikwm(url)
-        except Exception as tikwm_error:
-            logging.error(f"[TIKWM] ❌ Failed: {tikwm_error}")
-    
-    # Все методы провалились
-    raise Exception(f"All download methods failed. YT-DLP error: {ytdlp_error}")
-    finally:
-        if status_task:
             status_task.cancel()
-
 
 async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: int = None, use_proxy: bool = False) -> Tuple[Path, Optional[Path], Dict]:
     """Универсальный метод для YouTube/Instagram/музыки через yt-dlp с retry на 403"""
@@ -656,14 +649,20 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                         raise
 
                 metadata = {
-                    'title': info.get('title', 'Media'),
-                    'uploader': info.get('uploader', 'Unknown'),
+                    'title': None if info.get('title') == 'Unknown' or info.get('title') == 'None' else info.get('title', 'Media'),
+                    'uploader': None if info.get('uploader') == 'Unknown' or info.get('uploader') == 'None' else info.get('uploader'),
                     'webpage_url': info.get('webpage_url', url),
                     'duration': info.get('duration', 0),
                     'width': info.get('width', 0),
                     'height': info.get('height', 0),
                     'verified': info.get('creator_is_verified') or info.get('uploader_is_verified') or info.get('verified') or False,
                 }
+                
+                # Check description for 'Unknown' as well
+                if info.get('description') == 'Unknown' or info.get('description') == 'None':
+                    metadata['description'] = None
+                else:
+                    metadata['description'] = info.get('description')
 
                 # Находим скачанный файл
                 downloaded_files = list(DOWNLOADS_DIR.glob(f"*{unique_id}*"))
@@ -792,14 +791,20 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False) -> Tuple[Uni
     info, prepared_name = await asyncio.to_thread(_run_ytdlp_extract, ydl_opts, url)
 
     metadata = {
-        'title': info.get('title', 'TikTok Media'),
-        'uploader': info.get('uploader', 'Unknown'),
+        'title': None if info.get('title') == 'Unknown' or info.get('title') == 'None' else info.get('title', 'TikTok Media'),
+        'uploader': None if info.get('uploader') == 'Unknown' or info.get('uploader') == 'None' else info.get('uploader'),
         'webpage_url': info.get('webpage_url', url),
         'duration': info.get('duration', 0),
         'width': info.get('width', 0),
         'height': info.get('height', 0),
         'verified': info.get('creator_is_verified') or info.get('uploader_is_verified') or info.get('verified') or False,
     }
+    
+    # Check description for 'Unknown' as well
+    if info.get('description') == 'Unknown' or info.get('description') == 'None':
+        metadata['description'] = None
+    else:
+        metadata['description'] = info.get('description')
 
     # Determine downloaded files
     # We search by unique_id to catch all files (images, mp3, mp4)
@@ -873,8 +878,8 @@ async def _download_tiktok_tikwm(url: str) -> Tuple[Path, Optional[Path], Dict]:
     thumbnail_url = result.get('origin_cover') or result.get('cover')
     
     # Extract metadata
-    author = result.get('author', {}).get('unique_id', 'Unknown')
-    title = result.get('title', 'TikTok Video')
+    author = result.get('author', {}).get('unique_id')
+    title = result.get('title')
     duration = result.get('duration', 0)
     
     logging.info(f"tikwm: Downloading video from {video_url[:80]}...")
@@ -911,23 +916,20 @@ async def _download_tiktok_tikwm(url: str) -> Tuple[Path, Optional[Path], Dict]:
             logging.warning(f"tikwm: Failed to download thumbnail: {e}")
             thumbnail_path = None
     
-    # Не проверяем кодек - принимаем любой формат (H264 или HEVC)
-    # Если Telegram не поддержит HEVC, пользователь увидит ошибку и попробует снова
-    
     # Enrich metadata with verification status (requires extra API call)
     verified = False
     try:
         temp_meta = await asyncio.to_thread(fetch_tiktok_metadata, url)
         verified = temp_meta.get('verified', False)
         # Use uploader from fetch_tiktok_metadata if tikwm main API missed it
-        if (not author or author == 'Unknown') and temp_meta.get('uploader'):
+        if (not author or author == 'Unknown' or author == 'None') and temp_meta.get('uploader'):
             author = temp_meta['uploader']
     except Exception as e:
         logging.warning(f"Failed to fetch verification status in _download_tiktok_tikwm: {e}")
 
     metadata = {
-        'title': title,
-        'uploader': author,
+        'title': None if title == 'Unknown' or title == 'None' else title,
+        'uploader': None if author == 'Unknown' or author == 'None' else author,
         'webpage_url': url,
         'duration': duration,
         'verified': verified,
