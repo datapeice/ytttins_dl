@@ -37,14 +37,17 @@ def format_caption(metadata: dict, platform: str, original_url: str = "") -> str
     # Strip leading @
     uploader = uploader.lstrip('@')
     # Escape HTML special characters in uploader name
-    uploader = uploader.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    uploader = str(uploader).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    
+    title = metadata.get('title', 'Media')
+    title = str(title).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     
     if is_verified:
         # Use a combination of a visible emoji and custom tg-emoji if supported
         uploader = f"{uploader} <tg-emoji emoji-id=\"5233582409416448551\">✅</tg-emoji>"
 
     caption = (
-        f"👤 {uploader} | <a href=\"{url}\">Link</a>\n"
+        f"👤 {uploader} | <a href=\"{url}\">{title}</a>\n"
         f"Developed by @datapeice"
     )
     return caption
@@ -178,13 +181,22 @@ async def handle_search(message: types.Message):
         if isinstance(file_path, list) and file_path:
             file_path = file_path[0]
             
+        # Fetch rich song metadata from iTunes API early to log it
+        rich_meta = await fetch_song_metadata(query)
+        if rich_meta.get("title"):
+            metadata['title'] = rich_meta["title"]
+        if rich_meta.get("artist"):
+            metadata['uploader'] = rich_meta["artist"]
+            
+        history_title = metadata.get('title') or file_path.stem
+            
         stats.add_download(
             content_type='Music',
             user_id=message.from_user.id,
             username=stored_name,
             platform=successful_platform,
             url=video_url,
-            title=file_path.stem
+            title=history_title
         )
 
         download_logger.info(
@@ -192,15 +204,13 @@ async def handle_search(message: types.Message):
             f"Platform: {successful_platform} | "
             f"Type: Music (search) | "
             f"Query: {query} | "
-            f"URL: {video_url}"
+            f"URL: {video_url} | "
+            f"Title: {history_title}"
         )
 
         if file_path.exists():
             await update_status("📤 Uploading to Telegram...")
             caption = format_caption(metadata, successful_platform, video_url)
-            
-            # Fetch rich song metadata from iTunes API
-            rich_meta = await fetch_song_metadata(query)
             
             # Override thumbnail with high-res cover if available
             local_cover_path_str = rich_meta.get("local_cover_path")

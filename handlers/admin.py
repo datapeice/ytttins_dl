@@ -345,8 +345,11 @@ async def handle_admin_callback(callback: types.CallbackQuery):
                             url = h.url if h.url else ""
                             platform = get_history_platform_label(url)
                             display_username = format_history_username(h.username)
+                            
+                            label = h.title if h.title else platform
+                            safe_label = str(label).replace('[', '').replace(']', '')
 
-                            text += f"`{date_str}` | {display_username} | [{platform}]({url})\n"
+                            text += f"`{date_str}` | {display_username} | [{safe_label}]({url})\n"
                         
                         buttons = []
                         if page > 0:
@@ -402,8 +405,13 @@ async def handle_admin_callback(callback: types.CallbackQuery):
 
                                 platform = get_history_platform_label(url)
                                 display_username = format_history_username(handle_value)
+                                
+                                title_match = re.search(r'Title: (.*?)(?: \||$)', rest)
+                                title_val = title_match.group(1).strip() if title_match else ""
+                                label = title_val if title_val else platform
+                                safe_label = str(label).replace('[', '').replace(']', '')
 
-                                text += f"`{date_str}` | {display_username} | [{platform}]({url})\n"
+                                text += f"`{date_str}` | {display_username} | [{safe_label}]({url})\n"
                             except:
                                 pass
 

@@ -24,7 +24,7 @@ async def fetch_song_metadata(query: str) -> Dict[str, str]:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=params, timeout=5) as response:
                 if response.status == 200:
-                    data = await response.json()
+                    data = await response.json(content_type=None)
                     if data.get("resultCount", 0) > 0:
                         result = data["results"][0]
                         metadata["title"] = result.get("trackName")
