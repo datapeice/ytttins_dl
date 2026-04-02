@@ -3,9 +3,44 @@ import yt_dlp
 import asyncio
 import re
 import html
-from datetime import datetime
+import os
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
+
+def _local_tz() -> timezone:
+    """Returns local timezone offset parsed from TZ env var (e.g. 'Europe/Moscow')."""
+    # Explicit override always wins
+    if os.environ.get("TZ_OFFSET"):
+        return timezone(timedelta(hours=int(os.environ["TZ_OFFSET"])))
+
+    tz_str = os.environ.get("TZ", "")
+    # Map known timezone names to their standard UTC offsets
+    _TZ_MAP = {
+        "europe/moscow":    3,  # MSK UTC+3
+        "europe/kiev":      2,  # EET UTC+2 (winter), but close enough
+        "europe/kyiv":      2,
+        "europe/berlin":    1,
+        "europe/london":    0,
+        "america/new_york": -5,
+        "us/eastern":       -5,
+        "america/los_angeles": -8,
+        "us/pacific":       -8,
+        "asia/yekaterinburg": 5,
+        "asia/novosibirsk": 7,
+        "asia/vladivostok": 10,
+    }
+    offset = _TZ_MAP.get(tz_str.lower(), 3)  # default UTC+3 (matches docker-compose TZ=Europe/Moscow)
+    return timezone(timedelta(hours=offset))
+
+def _fmt_timestamp(dt: datetime) -> str:
+    """Convert a naive UTC datetime from DB to local time string."""
+    if dt is None:
+        return "?"
+    # Treat as UTC, convert to local
+    utc_dt = dt.replace(tzinfo=timezone.utc)
+    local_dt = utc_dt.astimezone(_local_tz())
+    return local_dt.strftime('%d-%m %H:%M')
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -362,7 +397,7 @@ async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext
                     else:
                         text = f"📜 *Download History (Page {page + 1})*\n\n"
                         for h in history:
-                            date_str = h.timestamp.strftime('%d-%m %H:%M')
+                            date_str = _fmt_timestamp(h.timestamp)
                             
                             url = h.url if h.url else ""
                             platform = get_history_platform_label(url)

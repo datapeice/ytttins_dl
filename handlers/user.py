@@ -533,6 +533,7 @@ async def handle_url(message: types.Message):
             return
 
         is_youtube = platform == "youtube" or 'youtu.be' in target_url or 'youtube.com' in target_url
+        status_message = None
         if is_group and not is_youtube:
             # Stealth mode for groups (no funny status messages)
             async def update_status(text: str):
@@ -1214,6 +1215,14 @@ async def handle_inline_result_chosen(chosen_result: types.ChosenInlineResult, b
             for p in file_path:
                 try: p.unlink()
                 except: pass
+            stats.add_download(
+                content_type='Music' if is_music else 'Video',
+                user_id=user_id,
+                username=stored_name,
+                platform=platform,
+                url=target_url,
+                title=metadata.get('title', 'Slideshow') if metadata else 'Slideshow'
+            )
             await update_status("✅ Uploaded to PM!")
             return
 
