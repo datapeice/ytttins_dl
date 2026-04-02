@@ -1015,42 +1015,6 @@ async def inline_query_handler(inline_query: types.InlineQuery):
     
     await inline_query.answer(results=[item], cache_time=300, is_personal=False)
 
-@router.chosen_inline_result()
-async def inline_result_chosen(chosen_result: types.ChosenInlineResult, bot: Bot):
-    logging.info(f"Chosen inline result: {chosen_result.result_id} with query {chosen_result.query}")
-    url = chosen_result.query.strip()
-    inline_message_id = chosen_result.inline_message_id
-    
-    if not inline_message_id:
-        logging.warning("No inline_message_id provided. Ensure result has a reply_markup.")
-        return
-
-    # Extract clean URL
-    url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
-    match = re.search(url_pattern, url)
-    if not match:
-        return
-    target_url = match.group(0)
-    
-    platform = get_platform(target_url)
-    
-    # YouTube Path: Show selection buttons (match regular bot, skip for shorts)
-    if platform == "youtube" and not is_youtube_music(target_url) and "/shorts/" not in target_url.lower():
-        request_id = str(uuid.uuid4())[:8]
-        url_cache[request_id] = target_url
-        
-        builder = InlineKeyboardBuilder()
-        builder.add(
-            InlineKeyboardButton(text="🎵 Audio (MP3)", callback_data=f"format:audio:{request_id}"),
-            InlineKeyboardButton(text="🎥 Video", callback_data=f"format:video:{request_id}")
-        )
-        await bot.edit_message_text(
-            text="Choose download format:",
-            inline_message_id=inline_message_id,
-            reply_markup=builder.as_markup()
-        )
-        return
-
 @router.callback_query(F.data.startswith("plist:"))
 async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
     try:
@@ -1138,7 +1102,8 @@ async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
             
             kb = InlineKeyboardBuilder()
             kb.add(InlineKeyboardButton(text="⬇️ Download ZIP", url=download_url))
-            kb.add(InlineKeyboardButton(text="⭐️ Support", callback_data="donate"))
+            kb.add(InlineKeyboardButton(text="⭐️ Support Bot", callback_data="show_donate_menu"))
+            kb.adjust(1)
             
             await status_msg.delete()
             await bot.send_message(
@@ -1157,6 +1122,7 @@ async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
                 if thumb_path and thumb_path.exists(): thumb_path.unlink()
 
         # Stats
+        display_name, stored_name, handle = resolve_user_identity(callback.from_user)
         stats.add_download(
             content_type='Playlist',
             user_id=user_id,
@@ -1173,52 +1139,79 @@ async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
 
 @router.chosen_inline_result()
 async def handle_inline_result_chosen(chosen_result: types.ChosenInlineResult, bot: Bot):
+    inline_message_id = chosen_result.inline_message_id
     try:
         result_id = chosen_result.result_id
-        inline_message_id = chosen_result.inline_message_id
         
-        target_url = url_cache.get(result_id)
-        if not target_url:
+        if not inline_message_id:
+            logging.warning("No inline_message_id provided. Ensure result has a reply_markup.")
             return
 
+        # Extract request_id from result_id (format: "dl:xxxxxxxx")
+        request_id = result_id.split(":", 1)[1] if ":" in result_id else result_id
+        target_url = url_cache.get(request_id)
+
+        # Fallback: extract URL from query text
+        if not target_url:
+            url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
+            match = re.search(url_pattern, chosen_result.query.strip())
+            if not match:
+                return
+            target_url = match.group(0)
+
         platform = get_platform(target_url)
-        
+        is_music = is_youtube_music(target_url)
+
+        # YouTube non-shorts non-music: show format selection buttons
+        if platform == "youtube" and not is_music and "/shorts/" not in target_url.lower():
+            new_request_id = str(uuid.uuid4())[:8]
+            url_cache[new_request_id] = target_url
+            builder = InlineKeyboardBuilder()
+            builder.add(
+                InlineKeyboardButton(text="🎵 Audio (MP3)", callback_data=f"format:audio:{new_request_id}"),
+                InlineKeyboardButton(text="🎥 Video", callback_data=f"format:video:{new_request_id}")
+            )
+            await bot.edit_message_text(
+                text="Choose download format:",
+                inline_message_id=inline_message_id,
+                reply_markup=builder.as_markup()
+            )
+            return
+
         async def update_status(text: str):
             try:
                 await bot.edit_message_text(text=text, inline_message_id=inline_message_id)
             except: pass
 
-        file_path, thumbnail_path, metadata = await download_media(target_url, progress_callback=update_status)
-        
-        await update_status("📤 uploading...")
-        
+        await update_status("⏳ Downloading...")
+        file_path, thumbnail_path, metadata = await download_media(target_url, is_music=is_music, progress_callback=update_status)
+
+        await update_status("📤 Uploading...")
+
         display_name, stored_name, handle = resolve_user_identity(chosen_result.from_user)
         stats.add_active_user(chosen_result.from_user.id)
-        
+
         user_id = chosen_result.from_user.id
         caption = format_caption(metadata, platform, target_url, is_music=is_music)
 
         # Slideshow check
         if isinstance(file_path, list):
-             # Slideshows go to PM since we can't edit inline message to media group
-             await bot.send_message(user_id, "📤 uploading slideshow to your PM...")
-             # ... existing slideshow logic ...
-             image_exts = ['.jpg', '.jpeg', '.png', '.webp']
-             ordered_files = sorted(file_path, key=lambda p: p.name)
-             media_group = [types.InputMediaPhoto(media=types.FSInputFile(p), caption=caption if i == 0 else "", parse_mode='HTML' if i == 0 else None) for i, p in enumerate(ordered_files) if p.suffix.lower() in image_exts][:10]
-             if media_group:
-                 await bot.send_media_group(user_id, media_group)
-             
-             for p in file_path:
-                 try: p.unlink()
-                 except: pass
-             await update_status("✅ uploaded to PM!")
-             return
+            await bot.send_message(user_id, "📤 Uploading slideshow to your PM...")
+            image_exts = ['.jpg', '.jpeg', '.png', '.webp']
+            ordered_files = sorted(file_path, key=lambda p: p.name)
+            media_group = [types.InputMediaPhoto(media=types.FSInputFile(p), caption=caption if i == 0 else "", parse_mode='HTML' if i == 0 else None) for i, p in enumerate(ordered_files) if p.suffix.lower() in image_exts][:10]
+            if media_group:
+                await bot.send_media_group(user_id, media_group)
+            for p in file_path:
+                try: p.unlink()
+                except: pass
+            await update_status("✅ Uploaded to PM!")
+            return
 
         if file_path.exists():
             if is_music:
                 sent = await bot.send_audio(
-                    user_id, 
+                    user_id,
                     types.FSInputFile(file_path),
                     thumbnail=types.FSInputFile(thumbnail_path) if thumbnail_path else None,
                     caption=caption,
@@ -1235,23 +1228,32 @@ async def handle_inline_result_chosen(chosen_result: types.ChosenInlineResult, b
                 )
                 media = types.InputMediaVideo(media=sent.video.file_id, caption=caption, parse_mode='HTML')
 
-            # Update the inline message with the media!
+            # Update the inline message with the media
             await bot.edit_message_media(media=media, inline_message_id=inline_message_id)
-            
+
             # Delete from PM after sending to inline
             try: await sent.delete()
             except: pass
-            
+
             # Clean up
             file_path.unlink()
             if thumbnail_path and thumbnail_path.exists(): thumbnail_path.unlink()
+
+            stats.add_download(
+                content_type='music' if is_music else 'video',
+                user_id=user_id,
+                username=stored_name,
+                platform=platform,
+                url=target_url,
+                title=metadata.get('title', 'Unknown') if metadata else 'Unknown'
+            )
         else:
             await update_status("❌ Error: Download failed.")
 
     except Exception as e:
         logging.error(f"Inline chosen download error: {e}")
         try:
-             await bot.edit_message_text(text=f"❌ Error: {str(e)[:100]}", inline_message_id=inline_message_id)
+            await bot.edit_message_text(text=f"❌ Error: {str(e)[:100]}", inline_message_id=inline_message_id)
         except:
-             pass
+            pass
 
