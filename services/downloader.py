@@ -289,34 +289,18 @@ def _cleanup_extra_files(files: List[Path], keep: Path) -> None:
 async def download_media(url: str, is_music: bool = False, video_height: int = None, progress_callback: Optional[Callable] = None, min_duration: int = 0) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
     logging.info(f"Using yt-dlp version: {yt_dlp.version.__version__}")
 
-    # Manage cycling funny statuses every 3 seconds
-    status_task = None
     if progress_callback:
         current_funny = random.choice(FUNNY_STATUSES)
 
         async def wrapped_callback(text: str = ""):
-            # We no longer show live percentage/speed to keep UI clean and fast
+            # Show a single static funny status — no cycling to avoid Telegram spam
             display_text = f"🎬 {current_funny}"
-            
             try:
                 await progress_callback(display_text)
             except Exception:
                 pass
 
-        async def status_cycler():
-            nonlocal current_funny
-            while True:
-                try:
-                    await asyncio.sleep(3)
-                    current_funny = random.choice(FUNNY_STATUSES)
-                    await wrapped_callback()
-                except asyncio.CancelledError:
-                    break
-                except Exception:
-                    await asyncio.sleep(3)
-
-        status_task = asyncio.create_task(status_cycler())
-        # Show first status immediately
+        # Show status once at the start
         await wrapped_callback()
 
 
@@ -365,81 +349,59 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     if '?' in url and platform not in ("youtube", "instagram", "pornhub"):
         url = url.split('?')[0]
     
+    # === МЕТОД 1: YT-DLP (основной) ===
+    ytdlp_error = None
     try:
-        # Prefer Cobalt on Heroku for Reddit (yt-dlp impersonate fails on Heroku)
-        if platform == "reddit" and cobalt_client:
-            try:
-                logging.info(f"[COBALT] Heroku-first attempt for Reddit: {url}")
-                file_path, thumb_path, metadata = await cobalt_client.download_media(
-                    url=url,
-                    quality="1080",
-                    is_audio=is_music,
-                    progress_callback=wrapped_callback if progress_callback else None
-                )
-                if file_path:
-                    if isinstance(file_path, list):
-                        logging.info(f"[COBALT] ✅ Success: {len(file_path)} files")
-                        return file_path, thumb_path, metadata
-                    elif file_path.exists():
-                        logging.info(f"[COBALT] ✅ Success: {file_path.name}")
-                        return file_path, thumb_path, metadata
-                logging.warning("[COBALT] ⚠️ No file returned")
-            except Exception as cobalt_error:
-                logging.error(f"[COBALT] ❌ Error (Heroku-first): {cobalt_error}")
-
-        # === МЕТОД 1: YT-DLP (основной) ===
-        ytdlp_error = None
-        try:
-            logging.info(f"[YT-DLP] Attempting download: {url}")
+        logging.info(f"[YT-DLP] Attempting download: {url}")
+        
+        # TikTok через специальный метод
+        if platform == "tiktok":
+            # Start fetching metadata/verification in parallel with download
+            enrich_task = asyncio.create_task(asyncio.to_thread(fetch_tiktok_metadata, url))
             
-            # TikTok через специальный метод
-            if platform == "tiktok":
-                # Start fetching metadata/verification in parallel with download
-                enrich_task = asyncio.create_task(asyncio.to_thread(fetch_tiktok_metadata, url))
+            # Always use tiktok_local first
+            res = await _download_local_tiktok(url, progress_callback=wrapped_callback if progress_callback else None)
+            
+            # Enrich metadata with verification for TikTok ALWAYS
+            if res and len(res) == 3:
+                files, thumb, meta = res
                 
-                # Always use tiktok_local first
-                res = await _download_local_tiktok(url, progress_callback=wrapped_callback if progress_callback else None)
-                
-                # Enrich metadata with verification for TikTok ALWAYS
-                if res and len(res) == 3:
-                    files, thumb, meta = res
+                # Post-process for thumbnails and dimensions if needed
+                if isinstance(files, Path) and files.exists():
+                    video_file = files
+                    # Always generate thumbnail if missing
+                    if not thumb or not thumb.exists():
+                        new_thumb = DOWNLOADS_DIR / f"{video_file.stem}_thumb.jpg"
+                        if generate_video_thumbnail(video_file, new_thumb):
+                            thumb = new_thumb
+                            res = (video_file, thumb, meta)
                     
-                    # Post-process for thumbnails and dimensions if needed
-                    if isinstance(files, Path) and files.exists():
-                        video_file = files
-                        # Always generate thumbnail if missing
-                        if not thumb or not thumb.exists():
-                            new_thumb = DOWNLOADS_DIR / f"{video_file.stem}_thumb.jpg"
-                            if generate_video_thumbnail(video_file, new_thumb):
-                                thumb = new_thumb
-                                res = (video_file, thumb, meta)
-                        
-                        # Ensure dimensions are present
-                        if not meta.get('width') or not meta.get('height'):
-                            w, h = probe_video_dimensions(video_file)
-                            if w > 0:
-                                meta['width'] = w
-                                meta['height'] = h
+                    # Ensure dimensions are present
+                    if not meta.get('width') or not meta.get('height'):
+                        w, h = probe_video_dimensions(video_file)
+                        if w > 0:
+                            meta['width'] = w
+                            meta['height'] = h
 
-                    # Await the enrichment task that was running in parallel
-                    try:
-                        enrich_meta = await enrich_task
-                        if enrich_meta.get('verified'):
-                            meta['verified'] = True
-                            logging.info(f"✅ Verified status enriched for {url} (parallel)")
-                        if enrich_meta.get('uploader') and (not meta.get('uploader') or meta.get('uploader') == 'Unknown'):
-                            meta['uploader'] = enrich_meta['uploader']
-                    except Exception as e:
-                        logging.warning(f"Failed to enrich verification for TikTok: {e}")
-                    
-                return res
-            
-            # YouTube/Instagram/музыка через универсальный метод
-            return await _download_local_ytdlp(url, is_music, video_height=video_height, min_duration=min_duration, progress_callback=wrapped_callback if progress_callback else None)
-            
-        except Exception as e:
-            ytdlp_error = str(e)
-            logging.warning(f"[YT-DLP] ❌ Failed: {ytdlp_error}")
+                # Await the enrichment task that was running in parallel
+                try:
+                    enrich_meta = await enrich_task
+                    if enrich_meta.get('verified'):
+                        meta['verified'] = True
+                        logging.info(f"✅ Verified status enriched for {url} (parallel)")
+                    if enrich_meta.get('uploader') and (not meta.get('uploader') or meta.get('uploader') == 'Unknown'):
+                        meta['uploader'] = enrich_meta['uploader']
+                except Exception as e:
+                    logging.warning(f"Failed to enrich verification for TikTok: {e}")
+                
+            return res
+        
+        # YouTube/Instagram/музыка через универсальный метод
+        return await _download_local_ytdlp(url, is_music, video_height=video_height, min_duration=min_duration, progress_callback=wrapped_callback if progress_callback else None)
+        
+    except Exception as e:
+        ytdlp_error = str(e)
+        logging.warning(f"[YT-DLP] ❌ Failed: {ytdlp_error}")
         
         # If Instagram photo-only post, go straight to Cobalt fallback
         if platform == "instagram" and cobalt_client and ytdlp_error and "There is no video in this post" in ytdlp_error:
@@ -511,9 +473,6 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         
         # Все методы провалились
         raise Exception(f"All download methods failed. YT-DLP error: {ytdlp_error}")
-    finally:
-        if status_task:
-            status_task.cancel()
 
 async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: int = None, use_proxy: bool = False, min_duration: int = 0, progress_callback: Callable = None) -> Tuple[Path, Optional[Path], Dict]:
     """Универсальный метод для YouTube/Instagram/музыки через yt-dlp с retry на 403"""
