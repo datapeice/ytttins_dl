@@ -806,8 +806,13 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 logging.info(f"[SPOTIFY] Attempting spotdl: {url}")
                 return await _download_spotify_spotdl(url, progress_callback=wrapped_callback if progress_callback else None)
             except Exception as spot_err:
-                logging.error(f"[SPOTIFY] ❌ spotdl failed: {spot_err}")
-                # Fallback to normal download if spotdl failed
+                if "SPOTIFY_RATE_LIMIT" in str(spot_err):
+                    logging.warning(f"Spotify rate limit hit for {url}. Switching to search mode...")
+                    # Instead of direct link download, we can still use yt-dlp which searches for title first
+                    pass
+                else:
+                    logging.error(f"[SPOTIFY] ❌ spotdl failed: {spot_err}")
+                # Fallback continues to Method 1 (yt-dlp)
         
         # YouTube/Instagram/музыка через универсальный метод
         return await _download_local_ytdlp(url, is_music, video_height=video_height, min_duration=min_duration, progress_callback=wrapped_callback if progress_callback else None)
@@ -1548,7 +1553,9 @@ async def _download_spotify_spotdl(url: str, progress_callback: Optional[Callabl
     
     cmd = [
         "python3", "-m", "spotdl", "download", url,
-        "--output", f"{DOWNLOADS_DIR}/%(title)s - %(artist)s_{unique_id}.%(ext)s"
+        "--output", f"{DOWNLOADS_DIR}/%(title)s - %(artist)s_{unique_id}.%(ext)s",
+        "--ignore-errors",  # Bypass 429 on some metadata steps
+        "--no-cache"        # Avoid stale rate-limit headers
     ]
     
     logging.info(f"Running spotdl command: {' '.join(cmd)}")
@@ -1564,6 +1571,10 @@ async def _download_spotify_spotdl(url: str, progress_callback: Optional[Callabl
     
     if process.returncode != 0:
         err_msg = stderr.decode().strip()
+        if "rate/request limit" in err_msg or "86400" in err_msg:
+             logging.warning(f"Spotify API rate limit hit! Falling back to generic download...")
+             # Fallback: manually search for song via YouTube Music
+             raise Exception("SPOTIFY_RATE_LIMIT")
         raise Exception(f"spotdl failed with code {process.returncode}: {err_msg}")
     
     # Find the downloaded file
