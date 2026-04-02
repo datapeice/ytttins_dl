@@ -1109,7 +1109,14 @@ async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
 
         if action == 'each':
             await status_msg.delete()
-            await bot.send_message(user_id, f"✅ All {len(results)} tracks from playlist sent individually!")
+            kb = InlineKeyboardBuilder()
+            kb.add(InlineKeyboardButton(text="⭐️ Support", callback_data="donate"))
+            
+            await bot.send_message(
+                user_id, 
+                f"✅ All {len(results)} tracks from playlist sent individually!",
+                reply_markup=kb.as_markup()
+            )
             # Cleanup all tracked files
             for file_path, thumb_path, _ in results:
                 if file_path.exists(): file_path.unlink()
