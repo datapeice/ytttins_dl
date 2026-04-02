@@ -11,7 +11,7 @@ from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
-from services.downloader import download_media, get_platform, is_youtube_music, is_playlist
+from services.downloader import download_media, get_platform, is_youtube_music, is_playlist, FUNNY_STATUSES
 from services import zip_service
 from database.storage import stats
 from services.logger import download_logger
@@ -256,7 +256,8 @@ async def process_successful_payment(message: types.Message):
 
 @router.message(Command("song"))
 @router.message(lambda m: m.text and (
-    m.text.lower().startswith('search ') or 
+    m.text.lower().startswith('search ') or
+    m.text.lower().startswith('найти ') or
     m.text.lower().startswith('/song') or
     m.text == "🔍 Search Song"
 ))
@@ -268,9 +269,11 @@ async def handle_search(message: types.Message):
         return
 
     if text_lower.startswith('search '):
-        query = message.text[text_lower.index('search ') + len('search '):].strip()
+        query = message.text[len('search '):].strip()
+    elif text_lower.startswith('найти '):
+        query = message.text[len('найти '):].strip()
     elif text_lower.startswith('/song '):
-        query = message.text[text_lower.index('/song ') + len('/song '):].strip()
+        query = message.text[len('/song '):].strip()
     elif text_lower.startswith('/song'):
         query = message.text[len('/song'):].strip()
     else:
@@ -296,8 +299,14 @@ async def handle_search(message: types.Message):
     is_group = message.chat.type != 'private'
 
     status_message = None
+    if not is_group:
+        status_message = await message.answer("🎬 " + random.choice(FUNNY_STATUSES), **reply_kwargs)
     async def update_status(text: str):
-        pass
+        if status_message:
+            try:
+                await safe_edit_text(status_message, text)
+            except Exception:
+                pass
 
     try:
         search_methods = [
@@ -445,7 +454,7 @@ async def handle_search(message: types.Message):
             await message.answer(user_error, parse_mode='Markdown', **reply_kwargs)
 
 
-@router.message(lambda m: m.text and not m.text.startswith(('/start', '/panel', '/whitelist', '/unwhitelist', 'add @', '/song')) and not m.text.lower().startswith('найти '))
+@router.message(lambda m: m.text and not m.text.startswith(('/start', '/panel', '/whitelist', '/unwhitelist', 'add @', '/song')) and not m.text.lower().startswith('найти ') and not m.text.lower().startswith('search '))
 async def handle_url(message: types.Message):
     # Accept any URL-like string
     url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
