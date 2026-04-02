@@ -702,6 +702,12 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
             try:
                 impersonate_target = IMPERSONATE_TARGETS[(attempt - 1) % len(IMPERSONATE_TARGETS)]
                 
+                # Facebook's Tahoe API fingerprints TLS — only chrome-99 works reliably
+                # (yt-dlp issue #15161: chrome-110 causes "Cannot parse data")
+                is_facebook = "facebook.com" in url or "fb.watch" in url
+                if is_facebook and use_impersonate:
+                    impersonate_target = 'chrome-99'
+                
                 ydl_opts = {
                     'outtmpl': output_template,
                     'cookiefile': str(cookie_file) if cookie_file.exists() and cookie_file.is_file() and cookie_file.stat().st_size > 0 else None,
@@ -757,6 +763,10 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     'Upgrade-Insecure-Requests': '1',
                     'User-Agent': user_agent,
                 }
+                # Facebook: use headers matching Chrome 99 to be consistent with impersonate target
+                if is_facebook and use_impersonate:
+                    browser_headers['Sec-Ch-Ua'] = '" Not A;Brand";v="99", "Chromium";v="99", "Google Chrome";v="99"'
+                    browser_headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36'
                 ydl_opts['http_headers'] = browser_headers
                 
                 # Имитация TLS-отпечатка браузера через curl-cffi (если поддерживается)
