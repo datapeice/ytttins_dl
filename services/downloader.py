@@ -658,7 +658,7 @@ def _cleanup_extra_files(files: List[Path], keep: Path) -> None:
 
 # === Основная логика ===
 
-async def download_media(url: str, is_music: bool = False, video_height: int = None, progress_callback: Optional[Callable] = None, min_duration: int = 0) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
+async def download_media(url: str, is_music: bool = False, video_height: int = None, progress_callback: Optional[Callable] = None, min_duration: int = 0, **kwargs) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
     logging.info(f"Using yt-dlp version: {yt_dlp.version.__version__}")
 
     status_task = None

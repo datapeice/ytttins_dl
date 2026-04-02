@@ -1127,6 +1127,7 @@ async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
             
             kb = InlineKeyboardBuilder()
             kb.add(InlineKeyboardButton(text="⬇️ Download ZIP", url=download_url))
+            kb.add(InlineKeyboardButton(text="⭐️ Support", callback_data="donate"))
             
             await status_msg.delete()
             await bot.send_message(
