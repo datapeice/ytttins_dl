@@ -289,18 +289,31 @@ def _cleanup_extra_files(files: List[Path], keep: Path) -> None:
 async def download_media(url: str, is_music: bool = False, video_height: int = None, progress_callback: Optional[Callable] = None, min_duration: int = 0) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
     logging.info(f"Using yt-dlp version: {yt_dlp.version.__version__}")
 
+    status_task = None
     if progress_callback:
         current_funny = random.choice(FUNNY_STATUSES)
 
         async def wrapped_callback(text: str = ""):
-            # Show a single static funny status — no cycling to avoid Telegram spam
             display_text = f"🎬 {current_funny}"
             try:
                 await progress_callback(display_text)
             except Exception:
                 pass
 
-        # Show status once at the start
+        async def status_cycler():
+            nonlocal current_funny
+            while True:
+                try:
+                    await asyncio.sleep(6)
+                    current_funny = random.choice(FUNNY_STATUSES)
+                    await wrapped_callback()
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    await asyncio.sleep(6)
+
+        status_task = asyncio.create_task(status_cycler())
+        # Show first status immediately
         await wrapped_callback()
 
 
@@ -473,6 +486,9 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         
         # Все методы провалились
         raise Exception(f"All download methods failed. YT-DLP error: {ytdlp_error}")
+    finally:
+        if status_task:
+            status_task.cancel()
 
 async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: int = None, use_proxy: bool = False, min_duration: int = 0, progress_callback: Callable = None) -> Tuple[Path, Optional[Path], Dict]:
     """Универсальный метод для YouTube/Instagram/музыки через yt-dlp с retry на 403"""
