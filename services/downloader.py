@@ -774,12 +774,22 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     if attempt < len(USER_AGENTS):
                         logging.info(f"Retrying with different user-agent...")
                         break  # Break inner loop, continue outer loop
-                    
-                # If not 403, raise immediately
+
+                # Check if it's a 429 rate-limit error — retry with backoff
+                if "429" in error_str or "Too Many Requests" in error_str:
+                    logging.warning(f"Attempt {attempt}/{len(USER_AGENTS)} failed with 429 (rate limit): {error_str[:150]}")
+                    last_error = e
+                    if attempt < len(USER_AGENTS):
+                        sleep_secs = 2 * attempt  # 2s, 4s, 6s …
+                        logging.info(f"Rate-limited — sleeping {sleep_secs}s before retry with different user-agent...")
+                        await asyncio.sleep(sleep_secs)
+                        break  # Break inner loop, continue outer loop
+
+                # If not 403/429, raise immediately
                 logging.error(f"YT-DLP error: {error_str[:200]}")
                 raise e
     
-    # All attempts failed with 403
+    # All attempts failed with 403/429
     raise last_error if last_error else Exception("All user-agent attempts failed")
 
 
