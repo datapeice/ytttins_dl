@@ -301,7 +301,7 @@ def resolve_facebook_share_url(url: str) -> str:
     return url
 
 
-def _download_reddit_direct(url: str, proxy_url: Optional[str] = None) -> Optional[Path]:
+def _download_reddit_direct(url: str, proxy_url: Optional[str] = None) -> Optional[Union[Path, List[Path]]]:
     """
     Fallback: fetch Reddit post JSON API, extract v.redd.it HLS/DASH video URL,
     download video+audio separately and merge with ffmpeg.
@@ -338,19 +338,65 @@ def _download_reddit_direct(url: str, proxy_url: Optional[str] = None) -> Option
         logging.warning(f"[REDDIT-DIRECT] Failed to fetch JSON: {e}")
         return None
 
-    try:
-        post = data[0]['data']['children'][0]['data']
-        media = post.get('media') or post.get('secure_media') or {}
-        reddit_video = media.get('reddit_video', {})
-        video_url = reddit_video.get('fallback_url') or reddit_video.get('hls_url')
+        # Try crosspost
         if not video_url:
-            # Try crosspost
-            xpost = (post.get('crosspost_parent_list') or [{}])[0]
-            xmedia = xpost.get('media') or xpost.get('secure_media') or {}
-            reddit_video = xmedia.get('reddit_video', {})
-            video_url = reddit_video.get('fallback_url') or reddit_video.get('hls_url')
+            xposts = post.get('crosspost_parent_list') or []
+            if xposts:
+                xpost = xposts[0]
+                xmedia = xpost.get('media') or xpost.get('secure_media') or {}
+                reddit_video = xmedia.get('reddit_video', {})
+                video_url = reddit_video.get('fallback_url') or reddit_video.get('hls_url')
+
+        # === IMAGE / GALLERY SUPPORT ===
         if not video_url:
-            logging.warning("[REDDIT-DIRECT] No video URL found in post JSON")
+            image_urls = []
+            
+            # Case 1: Gallery
+            if post.get('is_gallery') and 'media_metadata' in post:
+                metadata = post['media_metadata']
+                gallery_data = post.get('gallery_data', {}).get('items', [])
+                
+                # Use gallery order if available
+                item_ids = [item['media_id'] for item in gallery_data] if gallery_data else metadata.keys()
+                
+                for mid in item_ids:
+                    if mid in metadata:
+                        media_item = metadata[mid]
+                        # Try to get highest resolution version
+                        s = media_item.get('s', {})
+                        img_url = s.get('u') or s.get('gif')
+                        if img_url:
+                            image_urls.append(img_url.replace('&amp;', '&'))
+            
+            # Case 2: Single Image
+            elif not post.get('is_video') and any(post.get('url', '').lower().endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.webp', '.gif')):
+                image_urls.append(post['url'])
+                
+            if image_urls:
+                logging.info(f"[REDDIT-DIRECT] Found gallery/images: {len(image_urls)} items")
+                downloaded_images = []
+                unique_id = uuid.uuid4().hex[:8]
+                
+                for i, img_url in enumerate(image_urls):
+                    try:
+                        ext = '.jpg'
+                        if '.png' in img_url.lower(): ext = '.png'
+                        elif '.webp' in img_url.lower(): ext = '.webp'
+                        elif '.gif' in img_url.lower(): ext = '.gif'
+                        
+                        img_path = DOWNLOADS_DIR / f"reddit_{unique_id}_{i}{ext}"
+                        ir = requests.get(img_url, headers=headers, proxies=proxies, timeout=30)
+                        if ir.status_code == 200:
+                            with open(img_path, 'wb') as f:
+                                f.write(ir.content)
+                            downloaded_images.append(img_path)
+                    except Exception as img_err:
+                        logging.error(f"[REDDIT-DIRECT] Image {i} download error: {img_err}")
+                
+                if downloaded_images:
+                    return downloaded_images if len(downloaded_images) > 1 else downloaded_images[0]
+                    
+            logging.warning("[REDDIT-DIRECT] No video or image content found in post JSON")
             return None
 
         # Strip quality param to get best quality
