@@ -405,6 +405,93 @@ def _download_reddit_direct(url: str, proxy_url: Optional[str] = None) -> Option
         logging.error(f"[REDDIT-DIRECT] Unexpected error: {e}")
         return None
 
+def _download_facebook_direct(url: str, proxy_url: Optional[str] = None) -> Optional[Path]:
+    """
+    Fallback: scrape Facebook page HTML to extract video CDN URLs.
+    Works when yt-dlp extractor is broken (Cannot parse data bug).
+    """
+    import re, subprocess
+
+    proxies = None
+    if proxy_url:
+        pv = proxy_url.replace('socks5h', 'socks5')
+        proxies = {'http': pv, 'https': pv}
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Dest': 'document',
+    }
+
+    # Also try mbasic/mobile FB which is simpler HTML
+    urls_to_try = [url]
+    # Convert to mbasic if not already
+    if 'mbasic.facebook' not in url:
+        mbasic = url.replace('www.facebook.com', 'mbasic.facebook.com').replace('m.facebook.com', 'mbasic.facebook.com')
+        urls_to_try.append(mbasic)
+
+    video_url = None
+    for try_url in urls_to_try:
+        try:
+            resp = requests.get(try_url, headers=headers, proxies=proxies, timeout=15, allow_redirects=True)
+            if resp.status_code != 200:
+                logging.warning(f"[FB-DIRECT] HTTP {resp.status_code} for {try_url}")
+                continue
+            html = resp.text
+
+            # Patterns that appear in Facebook's page source (HD first, then SD)
+            patterns = [
+                r'"browser_native_hd_url"\s*:\s*"([^"]+)"',
+                r'"browser_native_sd_url"\s*:\s*"([^"]+)"',
+                r'"playable_url_quality_hd"\s*:\s*"([^"]+)"',
+                r'"playable_url"\s*:\s*"([^"]+)"',
+                r'hd_src\s*:\s*"([^"]+\.mp4[^"]*?)"',
+                r'sd_src\s*:\s*"([^"]+\.mp4[^"]*?)"',
+                r'"video_url"\s*:\s*"([^"]+)"',
+            ]
+
+            for pattern in patterns:
+                m = re.search(pattern, html)
+                if m:
+                    candidate = m.group(1).replace('\\/', '/').replace('\\u0025', '%').replace('\\u0026', '&')
+                    if 'fbcdn.net' in candidate or 'fbext' in candidate or '.mp4' in candidate:
+                        video_url = candidate
+                        logging.info(f"[FB-DIRECT] Found video URL via pattern: {pattern[:40]}")
+                        break
+            if video_url:
+                break
+        except Exception as e:
+            logging.warning(f"[FB-DIRECT] Error fetching {try_url}: {e}")
+            continue
+
+    if not video_url:
+        logging.warning("[FB-DIRECT] No video URL found in page HTML")
+        return None
+
+    # Download the video
+    unique_id = uuid.uuid4().hex[:8]
+    output_path = DOWNLOADS_DIR / f"facebook_{unique_id}.mp4"
+    try:
+        dl_headers = dict(headers)
+        dl_headers['Accept'] = 'video/mp4,video/*;q=0.9,*/*;q=0.8'
+        vr = requests.get(video_url, headers=dl_headers, proxies=proxies, stream=True, timeout=120)
+        if vr.status_code != 200:
+            logging.warning(f"[FB-DIRECT] Video download returned HTTP {vr.status_code}")
+            return None
+        with open(output_path, 'wb') as f:
+            for chunk in vr.iter_content(8192):
+                f.write(chunk)
+        logging.info(f"[FB-DIRECT] ✅ Downloaded: {output_path} ({output_path.stat().st_size // 1024} KB)")
+        return output_path
+    except Exception as e:
+        logging.error(f"[FB-DIRECT] Download error: {e}")
+        if output_path.exists():
+            output_path.unlink()
+        return None
+
+
 def _run_ytdlp_extract(ydl_opts: Dict, url: str) -> Tuple[Dict, str]:
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -673,7 +760,26 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                     return reddit_file, thumb_path, meta
             except Exception as reddit_direct_error:
                 logging.error(f"[REDDIT-DIRECT] ❌ Failed: {reddit_direct_error}")
-        
+
+        # === МЕТОД 5: FACEBOOK DIRECT SCRAPE ===
+        if platform == "facebook":
+            try:
+                logging.info(f"[FB-DIRECT] Trying HTML scrape fallback: {url}")
+                fb_file = await asyncio.to_thread(_download_facebook_direct, url, SOCKS_PROXY)
+                if fb_file and fb_file.exists():
+                    logging.info(f"[FB-DIRECT] ✅ Success: {fb_file.name}")
+                    w, h = probe_video_dimensions(fb_file)
+                    fb_thumb = DOWNLOADS_DIR / f"{fb_file.stem}_thumb.jpg"
+                    if not generate_video_thumbnail(fb_file, fb_thumb):
+                        fb_thumb = None
+                    return fb_file, fb_thumb, {
+                        'title': None, 'uploader': None,
+                        'webpage_url': url, 'duration': 0,
+                        'width': int(w), 'height': int(h), 'verified': False,
+                    }
+            except Exception as fb_err:
+                logging.error(f"[FB-DIRECT] ❌ Failed: {fb_err}")
+
         # Все методы провалились
         raise Exception(f"All download methods failed. YT-DLP error: {ytdlp_error}")
     finally:

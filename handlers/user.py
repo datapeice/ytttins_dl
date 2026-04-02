@@ -660,8 +660,8 @@ async def handle_url(message: types.Message):
                 }
                 
                 if metadata.get('width') and metadata.get('height'):
-                    video_kwargs['width'] = metadata.get('width')
-                    video_kwargs['height'] = metadata.get('height')
+                    video_kwargs['width'] = int(metadata.get('width'))
+                    video_kwargs['height'] = int(metadata.get('height'))
                 
                 if thumbnail_path:
                    video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
@@ -896,8 +896,8 @@ async def handle_resolution_selection(callback: types.CallbackQuery, bot: Bot):
                 }
                 
                 if metadata.get('width') and metadata.get('height'):
-                    video_kwargs['width'] = metadata.get('width')
-                    video_kwargs['height'] = metadata.get('height')
+                    video_kwargs['width'] = int(metadata.get('width'))
+                    video_kwargs['height'] = int(metadata.get('height'))
                 
                 if thumbnail_path:
                    video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
