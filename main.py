@@ -70,7 +70,7 @@ async def zip_cleanup_worker():
             zip_service.run_zip_cleanup_task()
         except Exception as e:
             logging.error(f"ZIP cleanup error: {e}")
-        await asyncio.sleep(600) # Run every 10 minutes
+        await asyncio.sleep(10800) # Run every 3 hours
 
 async def handle_zip_download_page(request):
     """Serves the minimalistic download page for a ZIP file."""

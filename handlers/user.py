@@ -113,26 +113,35 @@ async def probe_media_duration_seconds(media_path: Path) -> int:
 
 
 @router.message(Command("start"))
-async def cmd_start(message: types.Message):
+async def cmd_start(message: types.Message, bot: Bot):
+    me = await bot.get_me()
     display_name, stored_name, handle = resolve_user_identity(message.from_user)
     stats.add_active_user(message.from_user.id)
     
     welcome_text = (
         f"👋 <b>Hello, {display_name}!</b>\n\n"
-        "I will help you download video and music from TikTok, YouTube, Instagram, and other services.\n\n"
-        "📎 <b>Just send me a link!</b>\n"
-        "🔍 Or use me in any chat: <code>@ytttins_dl_bot &lt;link&gt;</code>\n\n"
+        "I will help you download video, music and <b>playlists</b> from TikTok, YouTube, Instagram, Reddit and others.\n\n"
+        "📎 <b>Just send me a link!</b>\n\n"
+        "👥 <b>Group Chats:</b>\n"
+        "Add me to your group to download media together with friends!\n\n"
+        "🔍 <b>Inline Mode:</b>\n"
+        "Use me in <i>any</i> chat: <code>@{me.username} &lt;link&gt;</code>\n\n"
         "⭐️ <b>Support development:</b> /donate"
     )
     
-    kb = ReplyKeyboardMarkup(
+    kb_builder = InlineKeyboardBuilder()
+    kb_builder.add(InlineKeyboardButton(text="➕ Add to Group", url=f"https://t.me/{me.username}?startgroup=true"))
+    
+    reply_kb = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🔍 Search Song"), KeyboardButton(text="⭐️ Support")]
         ],
         resize_keyboard=True
     )
     
-    await message.answer(welcome_text, reply_markup=kb, parse_mode='HTML')
+    await message.answer(welcome_text, reply_markup=reply_kb, parse_mode='HTML')
+    # Also send the inline button for group adding
+    await message.answer("Click below to invite me to your chat:", reply_markup=kb_builder.as_markup())
 
 @router.message(F.text == "⭐️ Support")
 @router.message(Command("donate"))
@@ -1061,39 +1070,46 @@ async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
 
         is_music = "music.youtube.com" in url or action in ('each', 'zip')
         
-        results = await download_media(url, is_music=True, progress_callback=update_status)
+        async def on_track_ready(res, i, total):
+            if action != 'each': return
+            
+            file_path, thumbnail_path, metadata = res
+            try:
+                caption = format_caption(metadata, 'youtube', metadata.get('webpage_url', url), is_music=True)
+                audio_kwargs = {
+                    "audio": types.FSInputFile(file_path),
+                    "duration": int(metadata.get('duration', 0)),
+                    "caption": caption,
+                    "parse_mode": "HTML"
+                }
+                if thumbnail_path and thumbnail_path.exists():
+                    audio_kwargs["thumbnail"] = types.FSInputFile(thumbnail_path)
+                
+                await bot.send_audio(user_id, **audio_kwargs)
+                # Small delay to avoid Telegram flood limits
+                await asyncio.sleep(1.5)
+            except Exception as e:
+                logging.error(f"Error sending track {i} (streaming): {e}")
+
+        # Start download
+        results = await download_media(
+            url, 
+            is_music=True, 
+            progress_callback=update_status,
+            on_track_callback=on_track_ready if action == 'each' else None
+        )
         
         if not results or not isinstance(results, list):
             await update_status("❌ Failed to process playlist or it's empty.")
             return
 
-        user_id = callback.from_user.id
-        display_name, stored_name, handle = resolve_user_identity(callback.from_user)
-
         if action == 'each':
-            await update_status(f"📤 Uploading {len(results)} tracks separately...")
-            
-            for i, (file_path, thumbnail_path, metadata) in enumerate(results, 1):
-                try:
-                    caption = format_caption(metadata, 'youtube', metadata.get('webpage_url', url), is_music=True)
-                    audio_kwargs = {
-                        "audio": types.FSInputFile(file_path),
-                        "duration": int(metadata.get('duration', 0)),
-                        "caption": caption,
-                        "parse_mode": "HTML"
-                    }
-                    if thumbnail_path and thumbnail_path.exists():
-                        audio_kwargs["thumbnail"] = types.FSInputFile(thumbnail_path)
-                    
-                    await bot.send_audio(user_id, **audio_kwargs)
-                except Exception as e:
-                    logging.error(f"Error sending track {i}: {e}")
-                finally:
-                    if file_path.exists(): file_path.unlink()
-                    if thumbnail_path and thumbnail_path.exists(): thumbnail_path.unlink()
-            
             await status_msg.delete()
-            await bot.send_message(user_id, "✅ All tracks from playlist sent individually!")
+            await bot.send_message(user_id, f"✅ All {len(results)} tracks from playlist sent individually!")
+            # Cleanup all tracked files
+            for file_path, thumb_path, _ in results:
+                if file_path.exists(): file_path.unlink()
+                if thumb_path and thumb_path.exists(): thumb_path.unlink()
 
         elif action == 'zip':
             await update_status("📦 Creating ZIP archive...")

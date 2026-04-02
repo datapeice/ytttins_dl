@@ -368,9 +368,25 @@ def _download_reddit_direct(url: str, proxy_url: Optional[str] = None) -> Option
                         if img_url:
                             image_urls.append(img_url.replace('&amp;', '&'))
             
-            # Case 2: Single Image
-            elif not post.get('is_video') and any(post.get('url', '').lower().endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.webp', '.gif')):
-                image_urls.append(post['url'])
+            # Case 2: Single Image or Preview
+            elif not post.get('is_video'):
+                url_candidate = post.get('url', '')
+                if any(url_candidate.lower().endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.webp', '.gif')):
+                    image_urls.append(url_candidate)
+                elif 'preview' in post:
+                    # Try to get the highest res source from preview images
+                    try:
+                        p_images = post['preview'].get('images', [])
+                        if p_images:
+                            source = p_images[0].get('source', {})
+                            p_url = source.get('url')
+                            if p_url:
+                                image_urls.append(p_url.replace('&amp;', '&'))
+                    except: pass
+                
+                # Last resort: thumbnail if it's a valid link
+                if not image_urls and post.get('thumbnail', '').startswith('http'):
+                    image_urls.append(post['thumbnail'])
                 
             if image_urls:
                 logging.info(f"[REDDIT-DIRECT] Found gallery/images: {len(image_urls)} items")
@@ -731,8 +747,9 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     
     # Check for playlists first
     if is_playlist(url) and (platform == "youtube" or is_youtube_music(url)):
+        on_track = kwargs.get('on_track_callback')
         logging.info(f"Downloading playlist: {url}")
-        return await _download_playlist_ytdlp(url, is_music=is_music, progress_callback=wrapped_callback if progress_callback else None)
+        return await _download_playlist_ytdlp(url, is_music=is_music, progress_callback=wrapped_callback if progress_callback else None, on_track_callback=on_track)
     
     # === МЕТОД 1: YT-DLP (основной) ===
     ytdlp_error = None
@@ -906,7 +923,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         if status_task:
             status_task.cancel()
 
-async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: int = None, use_proxy: bool = False, min_duration: int = 0, progress_callback: Callable = None) -> Tuple[Path, Optional[Path], Dict]:
+async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: int = None, use_proxy: bool = False, min_duration: int = 0, progress_callback: Callable = None, skip_cleanup: bool = False) -> Tuple[Path, Optional[Path], Dict]:
     """Универсальный метод для YouTube/Instagram/музыки через yt-dlp с retry на 403"""
     unique_id = uuid.uuid4().hex[:8]
     output_template = str(DOWNLOADS_DIR / f"%(title).50s_%(id)s_{unique_id}.%(ext)s")
@@ -1110,7 +1127,8 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     return downloaded_files, None, metadata
 
                 file_path = _select_best_downloaded_file(downloaded_files)
-                _cleanup_extra_files(downloaded_files, file_path)
+                if not skip_cleanup:
+                    _cleanup_extra_files(downloaded_files, file_path)
                 
                 if file_path.suffix == '.unknown_video':
                     fsize = file_path.stat().st_size
@@ -1363,7 +1381,8 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False, progress_cal
         return path, None, metadata
         
     selected_path = _select_best_downloaded_file(downloaded_files)
-    _cleanup_extra_files(downloaded_files, selected_path)
+    if not skip_cleanup:
+        _cleanup_extra_files(downloaded_files, selected_path)
     return selected_path, None, metadata
 
 
@@ -1461,3 +1480,51 @@ async def _download_tiktok_tikwm(url: str) -> Tuple[Path, Optional[Path], Dict]:
     }
     
     return video_path, thumbnail_path, metadata
+
+async def _download_playlist_ytdlp(url: str, is_music: bool = True, progress_callback: Optional[Callable] = None, on_track_callback: Optional[Callable] = None) -> List[Tuple[Path, Optional[Path], dict]]:
+    """Download entire playlist/album via local yt-dlp."""
+    playlist_results = []
+    
+    ydl_opts = {
+        'cookiefile': str(DATA_DIR / "cookies.txt") if (DATA_DIR / "cookies.txt").exists() else None,
+        'quiet': True,
+        'extract_flat': True,
+        'playlist_items': '1-50', # Limit to 50 items for safety
+    }
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # We must use wait=True or similar to get entries correctly in flat mode
+            info = await asyncio.to_thread(ydl.extract_info, url, download=False)
+            entries = info.get('entries', [])
+            
+            total = len(entries)
+            if not entries: return []
+
+            for i, entry in enumerate(entries, 1):
+                entry_url = entry.get('url') or entry.get('webpage_url')
+                if not entry_url: continue
+                
+                if progress_callback:
+                    await progress_callback(f"⏳ Downloading track {i}/{total}...")
+                
+                try:
+                    # WE PASS skip_cleanup=True here to preserve all files for the ZIP
+                    res = await _download_local_ytdlp(entry_url, is_music=is_music, skip_cleanup=True)
+                    
+                    if on_track_callback:
+                        # If we have a track callback (e.g. for direct sending), use it immediately
+                        await on_track_callback(res, i, total)
+                        # We can still add to results, BUT if on_track handled it, 
+                        # maybe we don't want to keep it in memory? 
+                        # For ZIP we NEED to keep it. For 'each' we can skip.
+                    
+                    playlist_results.append(res)
+                except Exception as e:
+                    logging.error(f"Error downloading playlist item {i}: {e}")
+                    continue
+                    
+        return playlist_results
+    except Exception as e:
+        logging.error(f"Playlist download error: {e}")
+        return []
