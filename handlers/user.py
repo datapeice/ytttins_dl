@@ -11,7 +11,7 @@ from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
-from services.downloader import download_media, get_platform, is_youtube_music, is_playlist
+from services.downloader import download_media, get_platform, is_youtube_music, is_playlist, FUNNY_STATUSES
 from services import zip_service
 from database.storage import stats
 from services.logger import download_logger
@@ -300,7 +300,7 @@ async def handle_search(message: types.Message):
 
     status_message = None
     if not is_group:
-        status_message = await message.answer("🔍 Searching...", **reply_kwargs)
+        status_message = await message.answer("🎬 " + random.choice(FUNNY_STATUSES), **reply_kwargs)
     async def update_status(text: str):
         if status_message:
             try:
