@@ -473,9 +473,14 @@ def _download_facebook_direct(url: str, proxy_url: Optional[str] = None) -> Opti
                 r'"browser_native_sd_url"\s*:\s*"([^"]+)"',
                 r'"playable_url_quality_hd"\s*:\s*"([^"]+)"',
                 r'"playable_url"\s*:\s*"([^"]+)"',
+                r'"playable_url_quality_standard"\s*:\s*"([^"]+)"',
+                r'"hd_src_no_ratelimit"\s*:\s*"([^"]+)"',
+                r'"sd_src_no_ratelimit"\s*:\s*"([^"]+)"',
                 r'hd_src\s*:\s*"([^"]+\.mp4[^"]*?)"',
                 r'sd_src\s*:\s*"([^"]+\.mp4[^"]*?)"',
                 r'"video_url"\s*:\s*"([^"]+)"',
+                r'"scrubber_video_url"\s*:\s*"([^"]+)"',
+                r'\[\{"url"\s*:\s*"([^"]+\.mp4[^"]*?)"',  # Common in GraphQL arrays
             ]
 
             for pattern in patterns:
@@ -488,9 +493,27 @@ def _download_facebook_direct(url: str, proxy_url: Optional[str] = None) -> Opti
                         break
             if video_url:
                 break
-        except Exception as e:
-            logging.warning(f"[FB-DIRECT] Error fetching {try_url}: {e}")
-            continue
+    if not video_url:
+        # Final attempt: extract video ID and try a canonical page
+        video_id_match = re.search(r'/(?:videos|reel|pcb\.[0-9]+)/([0-9]+)', url)
+        if video_id_match:
+            video_id = video_id_match.group(1)
+            try_url = f"https://www.facebook.com/video.php?v={video_id}"
+            logging.info(f"[FB-DIRECT] No patterns matched in original page. Trying canonical: {try_url}")
+            try:
+                resp = session.get(try_url, headers=headers, proxies=proxies, timeout=15, allow_redirects=True)
+                if resp.status_code == 200:
+                    html = resp.text
+                    for pattern in patterns:
+                        m = re.search(pattern, html)
+                        if m:
+                            candidate = m.group(1).replace('\\/', '/').replace('\\u0025', '%').replace('\\u0026', '&')
+                            if 'fbcdn.net' in candidate or '.mp4' in candidate:
+                                video_url = candidate
+                                logging.info(f"[FB-DIRECT] Found video URL in canonical page via pattern: {pattern[:40]}")
+                                break
+            except Exception as e:
+                logging.warning(f"[FB-DIRECT] Error fetching canonical {try_url}: {e}")
 
     if not video_url:
         logging.warning("[FB-DIRECT] No video URL found in page HTML")

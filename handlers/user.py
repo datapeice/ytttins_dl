@@ -477,7 +477,7 @@ async def handle_url(message: types.Message):
                 await message.answer("Sorry, this platform is not supported.", **reply_kwargs)
             return
 
-        if platform == "youtube" and not is_youtube_music(target_url):
+        if platform == "youtube" and not is_youtube_music(target_url) and "/shorts/" not in target_url.lower():
             request_id = str(uuid.uuid4())[:8]
             url_cache[request_id] = target_url
             
@@ -1000,8 +1000,8 @@ async def inline_result_chosen(chosen_result: types.ChosenInlineResult, bot: Bot
     
     platform = get_platform(target_url)
     
-    # YouTube Path: Show selection buttons (match regular bot)
-    if platform == "youtube" and not is_youtube_music(target_url):
+    # YouTube Path: Show selection buttons (match regular bot, skip for shorts)
+    if platform == "youtube" and not is_youtube_music(target_url) and "/shorts/" not in target_url.lower():
         request_id = str(uuid.uuid4())[:8]
         url_cache[request_id] = target_url
         
