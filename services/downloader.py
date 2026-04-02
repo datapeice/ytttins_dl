@@ -214,6 +214,8 @@ def get_platform(url: str) -> str:
         return "dailymotion"
     elif "pornhub.com" in url_lower:
         return "pornhub"
+    elif "spotify.com" in url_lower:
+        return "spotify"
     elif "://t.me" in url_lower or "://telegram.me" in url_lower:
         return "unknown"
     elif "https://" in url_lower or "http://" in url_lower:
@@ -797,6 +799,15 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                     logging.warning(f"Failed to enrich verification for TikTok: {e}")
                 
             return res
+        
+        # Spotify через spotdl
+        if platform == "spotify":
+            try:
+                logging.info(f"[SPOTIFY] Attempting spotdl: {url}")
+                return await _download_spotify_spotdl(url, progress_callback=wrapped_callback if progress_callback else None)
+            except Exception as spot_err:
+                logging.error(f"[SPOTIFY] ❌ spotdl failed: {spot_err}")
+                # Fallback to normal download if spotdl failed
         
         # YouTube/Instagram/музыка через универсальный метод
         return await _download_local_ytdlp(url, is_music, video_height=video_height, min_duration=min_duration, progress_callback=wrapped_callback if progress_callback else None)
@@ -1528,3 +1539,57 @@ async def _download_playlist_ytdlp(url: str, is_music: bool = True, progress_cal
     except Exception as e:
         logging.error(f"Playlist download error: {e}")
         return []
+
+async def _download_spotify_spotdl(url: str, progress_callback: Optional[Callable] = None) -> Tuple[Path, Optional[Path], Dict]:
+    """Download Spotify track using spotdl CLI."""
+    unique_id = uuid.uuid4().hex[:8]
+    # spotdl needs a clean working dir for temp files sometimes, but let's just use DOWNLOADS_DIR
+    tmp_name = f"spotify_{unique_id}"
+    
+    cmd = [
+        "python3", "-m", "spotdl", "download", url,
+        "--output", f"{DOWNLOADS_DIR}/%(title)s - %(artist)s_{unique_id}.%(ext)s"
+    ]
+    
+    logging.info(f"Running spotdl command: {' '.join(cmd)}")
+    
+    # Run the command
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    
+    stdout, stderr = await process.communicate()
+    
+    if process.returncode != 0:
+        err_msg = stderr.decode().strip()
+        raise Exception(f"spotdl failed with code {process.returncode}: {err_msg}")
+    
+    # Find the downloaded file
+    downloaded_files = list(DOWNLOADS_DIR.glob(f"*{unique_id}*"))
+    if not downloaded_files:
+        raise Exception("spotdl: File not found after download (search by unique_id failed)")
+        
+    audio_path = _select_best_downloaded_file(downloaded_files)
+    
+    # Meta (spotdl already embeds metadata into MP3, so we just try to read it back or guess)
+    # We use mutagen if we need to be really precise, but basic guess works
+    filename = audio_path.name
+    try:
+        title_artist = filename.split(f"_{unique_id}")[0]
+        title = title_artist.split(" - ")[0]
+        uploader = title_artist.split(" - ")[1] if " - " in title_artist else "Spotify"
+    except:
+        title, uploader = filename, "Spotify"
+
+    meta = {
+        'title': title,
+        'uploader': uploader,
+        'webpage_url': url,
+        'duration': 0, # mutagen could fill this
+        'verified': False,
+    }
+    
+    # No extra thumbnail needed since spotdl embeds it into the MP3
+    return audio_path, None, meta

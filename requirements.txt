@@ -20,3 +20,4 @@ mutagen
 websockets
 secretstorage
 yt-dlp-ejs
+spotdl>=4.2.0
