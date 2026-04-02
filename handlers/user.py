@@ -1056,10 +1056,14 @@ async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
     try:
         await callback.answer()
         action, request_id = callback.data.split(":", 2)[1:]
+        user_id = callback.from_user.id
+        message_id = callback.message.message_id if callback.message else None
+        inline_message_id = callback.inline_message_id
         
         url = url_cache.get(request_id)
         if not url:
-            await callback.message.edit_text("⚠️ Request expired. Please send the link again.")
+            if callback.message:
+                await callback.message.edit_text("⚠️ Request expired. Please send the link again.")
             return
 
         status_msg = await callback.message.edit_text("⏳ Processing playlist, please wait...")
@@ -1159,24 +1163,25 @@ async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
         logging.error(f"Playlist handler error: {e}")
         try: await callback.message.edit_text(f"❌ Error processing playlist: {str(e)}")
         except: pass
-    await bot.edit_message_text(
-        text="downloading...",
-        inline_message_id=inline_message_id
-    )
-    
-    # We call the same internal logic that handle_url uses
-    # But since it's an inline message, we'll use a specialized helper or adapt.
-    # For now, let's trigger it directly.
+
+@router.chosen_inline_result()
+async def handle_inline_result_chosen(chosen_result: types.ChosenInlineResult, bot: Bot):
     try:
-        # Resolve music vs video for autodownload
-        is_music = is_youtube_music(target_url) or platform == "soundcloud"
+        result_id = chosen_result.result_id
+        inline_message_id = chosen_result.inline_message_id
+        
+        target_url = url_cache.get(result_id)
+        if not target_url:
+            return
+
+        platform = get_platform(target_url)
         
         async def update_status(text: str):
             try:
                 await bot.edit_message_text(text=text, inline_message_id=inline_message_id)
             except: pass
 
-        file_path, thumbnail_path, metadata = await download_media(target_url, is_music, progress_callback=update_status)
+        file_path, thumbnail_path, metadata = await download_media(target_url, progress_callback=update_status)
         
         await update_status("📤 uploading...")
         
