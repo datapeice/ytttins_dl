@@ -917,15 +917,11 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
     is_instagram = "instagram.com" in url
     
     # Try multiple user-agents if we get 403/429
-    # Optimization for Reddit: limit retries since it often returns 429
     max_attempts = 2 if is_reddit else len(USER_AGENTS)
     
     for attempt, user_agent in enumerate(USER_AGENTS[:max_attempts], 1):
-        # First try with impersonate, fallback to without if it fails
+        # We use impersonate to bypass cloudflare/429
         impersonate_modes = [True, False]
-        if is_reddit:
-            # Avoid yt-dlp impersonate on Heroku (AssertionError from ImpersonateTarget)
-            impersonate_modes = [False]
         for use_impersonate in impersonate_modes:
             try:
                 impersonate_target = IMPERSONATE_TARGETS[(attempt - 1) % len(IMPERSONATE_TARGETS)]
@@ -953,8 +949,11 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     'external_downloader_args': ['--max-connection-per-server=4', '--split=4', '--min-split-size=1M'],
                     'exec_before_download': [],  # Prevent PhantomJS usage
                     'extractor_args': {
+                        'reddit': {
+                            'impersonate': True,
+                        },
                         'pornhub': {
-                            'no_js': True  # Try without JS first
+                            'no_js': True
                         }
                     },
                     'js_runtimes': {
