@@ -493,27 +493,35 @@ def _download_facebook_direct(url: str, proxy_url: Optional[str] = None) -> Opti
                         break
             if video_url:
                 break
+        except Exception as e:
+            logging.warning(f"[FB-DIRECT] Error fetching {try_url}: {e}")
+            continue
+
     if not video_url:
         # Final attempt: extract video ID and try a canonical page
-        video_id_match = re.search(r'/(?:videos|reel|pcb\.[0-9]+)/([0-9]+)', url)
+        # Search for long sequence of digits at end of URL or after a slash
+        video_id_match = re.search(r'(?:/videos/|/reel/|/pcb\.[0-9]+/|v=)([0-9]{12,})', url)
+        if not video_id_match:
+             video_id_match = re.search(r'/([0-9]{12,})', url)
+             
         if video_id_match:
             video_id = video_id_match.group(1)
-            try_url = f"https://www.facebook.com/video.php?v={video_id}"
-            logging.info(f"[FB-DIRECT] No patterns matched in original page. Trying canonical: {try_url}")
+            can_url = f"https://www.facebook.com/video.php?v={video_id}"
+            logging.info(f"[FB-DIRECT] No patterns matched in original page. Trying canonical: {can_url}")
             try:
-                resp = session.get(try_url, headers=headers, proxies=proxies, timeout=15, allow_redirects=True)
+                resp = session.get(can_url, headers=headers, proxies=proxies, timeout=15, allow_redirects=True)
                 if resp.status_code == 200:
                     html = resp.text
                     for pattern in patterns:
                         m = re.search(pattern, html)
                         if m:
                             candidate = m.group(1).replace('\\/', '/').replace('\\u0025', '%').replace('\\u0026', '&')
-                            if 'fbcdn.net' in candidate or '.mp4' in candidate:
+                            if 'fbcdn.net' in candidate or 'fbext' in candidate or '.mp4' in candidate:
                                 video_url = candidate
                                 logging.info(f"[FB-DIRECT] Found video URL in canonical page via pattern: {pattern[:40]}")
                                 break
             except Exception as e:
-                logging.warning(f"[FB-DIRECT] Error fetching canonical {try_url}: {e}")
+                logging.warning(f"[FB-DIRECT] Error fetching canonical {can_url}: {e}")
 
     if not video_url:
         logging.warning("[FB-DIRECT] No video URL found in page HTML")
