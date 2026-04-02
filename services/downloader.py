@@ -263,8 +263,21 @@ def resolve_facebook_share_url(url: str) -> str:
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
     }
+    
+    # Use session for cookies if available
+    session = requests.Session()
+    cookie_file = DATA_DIR / "cookies.txt"
+    if cookie_file.exists():
+        try:
+            from http.cookiejar import MozillaCookieJar
+            cj = MozillaCookieJar(str(cookie_file))
+            cj.load(ignore_discard=True, ignore_expires=True)
+            session.cookies.update(cj)
+        except Exception:
+            pass
+
     try:
-        resp = requests.head(url, headers=headers, allow_redirects=True, timeout=10)
+        resp = session.head(url, headers=headers, allow_redirects=True, timeout=10)
         resolved = resp.url
         # Strip query params (tracking noise)
         if '?' in resolved:
@@ -417,6 +430,19 @@ def _download_facebook_direct(url: str, proxy_url: Optional[str] = None) -> Opti
         pv = proxy_url.replace('socks5h', 'socks5')
         proxies = {'http': pv, 'https': pv}
 
+    # Load Netscape cookies if available
+    session = requests.Session()
+    cookie_file = DATA_DIR / "cookies.txt"
+    if cookie_file.exists():
+        try:
+            from http.cookiejar import MozillaCookieJar
+            cj = MozillaCookieJar(str(cookie_file))
+            cj.load(ignore_discard=True, ignore_expires=True)
+            session.cookies.update(cj)
+            logging.info(f"[FB-DIRECT] Loaded cookies from {cookie_file.name}")
+        except Exception as ce:
+            logging.warning(f"[FB-DIRECT] Failed to load cookies: {ce}")
+
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
@@ -435,7 +461,7 @@ def _download_facebook_direct(url: str, proxy_url: Optional[str] = None) -> Opti
     video_url = None
     for try_url in urls_to_try:
         try:
-            resp = requests.get(try_url, headers=headers, proxies=proxies, timeout=15, allow_redirects=True)
+            resp = session.get(try_url, headers=headers, proxies=proxies, timeout=15, allow_redirects=True)
             if resp.status_code != 200:
                 logging.warning(f"[FB-DIRECT] HTTP {resp.status_code} for {try_url}")
                 continue
@@ -476,6 +502,7 @@ def _download_facebook_direct(url: str, proxy_url: Optional[str] = None) -> Opti
     try:
         dl_headers = dict(headers)
         dl_headers['Accept'] = 'video/mp4,video/*;q=0.9,*/*;q=0.8'
+        # Use simple requests with proxies for the actual file download to avoid potential session issues with binary streams
         vr = requests.get(video_url, headers=dl_headers, proxies=proxies, stream=True, timeout=120)
         if vr.status_code != 200:
             logging.warning(f"[FB-DIRECT] Video download returned HTTP {vr.status_code}")

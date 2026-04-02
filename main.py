@@ -22,11 +22,23 @@ WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", 8443))
 
 async def on_startup(bot: Bot):
     from services.cookie_utils import convert_netscape_to_json
-    from config import DATA_DIR
+    from config import DATA_DIR, COOKIES_CONTENT
     
     cookies_txt = DATA_DIR / "cookies.txt"
     cookies_json = DATA_DIR / "cookies.json"
-    convert_netscape_to_json(cookies_txt, cookies_json)
+    
+    # Write cookies from environment content if provided
+    if COOKIES_CONTENT:
+        try:
+            with open(cookies_txt, 'w', encoding='utf-8') as f:
+                f.write(COOKIES_CONTENT)
+            logging.info(f"Successfully wrote cookies to {cookies_txt.name} from COOKIES_CONTENT")
+        except Exception as e:
+            logging.error(f"Failed to write cookies from environment: {e}")
+            
+    # Convert for Cobalt if txt exists
+    if cookies_txt.exists():
+        convert_netscape_to_json(cookies_txt, cookies_json)
 
     asyncio.create_task(delete_old_files())
     is_local_api = "telegram-bot-api" in os.getenv("TELEGRAM_API_URL", "")
