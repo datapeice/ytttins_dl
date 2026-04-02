@@ -11,7 +11,8 @@ from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
-from services.downloader import download_media, get_platform, is_youtube_music
+from services.downloader import download_media, get_platform, is_youtube_music, is_playlist
+from services import zip_service
 from database.storage import stats
 from services.logger import download_logger
 from config import DOWNLOADS_DIR
@@ -478,6 +479,18 @@ async def handle_url(message: types.Message):
             return
 
         if platform == "youtube" and not is_youtube_music(target_url) and "/shorts/" not in target_url.lower():
+            if is_playlist(target_url):
+                request_id = str(uuid.uuid4())[:8]
+                url_cache[request_id] = target_url
+                builder = InlineKeyboardBuilder()
+                builder.add(
+                    InlineKeyboardButton(text="🎵 Tracks separately", callback_data=f"plist:each:{request_id}"),
+                    InlineKeyboardButton(text="📦 ZIP Pack", callback_data=f"plist:zip:{request_id}")
+                )
+                builder.adjust(1)
+                await message.answer("📁 YouTube Playlist detected!\nHow would you like to download it?", reply_markup=builder.as_markup(), **reply_kwargs)
+                return
+
             request_id = str(uuid.uuid4())[:8]
             url_cache[request_id] = target_url
             
@@ -487,6 +500,18 @@ async def handle_url(message: types.Message):
                 InlineKeyboardButton(text="🎥 Video", callback_data=f"format:video:{request_id}")
             )
             await message.answer("Choose download format:", reply_markup=builder.as_markup(), **reply_kwargs)
+            return
+
+        if is_youtube_music(target_url) and is_playlist(target_url):
+            request_id = str(uuid.uuid4())[:8]
+            url_cache[request_id] = target_url
+            builder = InlineKeyboardBuilder()
+            builder.add(
+                    InlineKeyboardButton(text="🎵 Tracks separately", callback_data=f"plist:each:{request_id}"),
+                    InlineKeyboardButton(text="📦 ZIP Pack", callback_data=f"plist:zip:{request_id}")
+            )
+            builder.adjust(1)
+            await message.answer("🎹 YouTube Music Album/Playlist detected!\nHow would you like to download it?", reply_markup=builder.as_markup(), **reply_kwargs)
             return
 
         is_youtube = platform == "youtube" or 'youtu.be' in target_url or 'youtube.com' in target_url
@@ -1017,7 +1042,106 @@ async def inline_result_chosen(chosen_result: types.ChosenInlineResult, bot: Bot
         )
         return
 
-    # Other Platforms Path: Start download immediately
+@router.callback_query(F.data.startswith("plist:"))
+async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
+    try:
+        await callback.answer()
+        action, request_id = callback.data.split(":", 2)[1:]
+        
+        url = url_cache.get(request_id)
+        if not url:
+            await callback.message.edit_text("⚠️ Request expired. Please send the link again.")
+            return
+
+        status_msg = await callback.message.edit_text("⏳ Processing playlist, please wait...")
+        
+        async def update_status(text: str):
+            try: await safe_edit_text(status_msg, text)
+            except: pass
+
+        is_music = "music.youtube.com" in url or action in ('each', 'zip')
+        
+        results = await download_media(url, is_music=True, progress_callback=update_status)
+        
+        if not results or not isinstance(results, list):
+            await update_status("❌ Failed to process playlist or it's empty.")
+            return
+
+        user_id = callback.from_user.id
+        display_name, stored_name, handle = resolve_user_identity(callback.from_user)
+
+        if action == 'each':
+            await update_status(f"📤 Uploading {len(results)} tracks separately...")
+            
+            for i, (file_path, thumbnail_path, metadata) in enumerate(results, 1):
+                try:
+                    caption = format_caption(metadata, 'youtube', metadata.get('webpage_url', url), is_music=True)
+                    audio_kwargs = {
+                        "audio": types.FSInputFile(file_path),
+                        "duration": int(metadata.get('duration', 0)),
+                        "caption": caption,
+                        "parse_mode": "HTML"
+                    }
+                    if thumbnail_path and thumbnail_path.exists():
+                        audio_kwargs["thumbnail"] = types.FSInputFile(thumbnail_path)
+                    
+                    await bot.send_audio(user_id, **audio_kwargs)
+                except Exception as e:
+                    logging.error(f"Error sending track {i}: {e}")
+                finally:
+                    if file_path.exists(): file_path.unlink()
+                    if thumbnail_path and thumbnail_path.exists(): thumbnail_path.unlink()
+            
+            await status_msg.delete()
+            await bot.send_message(user_id, "✅ All tracks from playlist sent individually!")
+
+        elif action == 'zip':
+            await update_status("📦 Creating ZIP archive...")
+            
+            files = [r[0] for r in results]
+            # Try to get a decent name for the ZIP
+            zip_name = "youtube_playlist"
+            if results and results[0][2].get('title'):
+                zip_name = f"playlist_{results[0][2].get('title')[:20]}"
+            
+            secure_id = zip_service.create_playlist_zip(files, zip_name)
+            
+            # Use the user's domain
+            download_url = f"https://bot.datapeice.me/dl/{secure_id}"
+            
+            kb = InlineKeyboardBuilder()
+            kb.add(InlineKeyboardButton(text="⬇️ Download ZIP", url=download_url))
+            
+            await status_msg.delete()
+            await bot.send_message(
+                user_id,
+                f"📦 <b>Playlist ZIP is ready!</b>\n\n"
+                f"Contains: <b>{len(files)}</b> tracks\n"
+                f"Valid for: <b>24 hours</b>\n\n"
+                f"Your private link:\n<code>{download_url}</code>",
+                reply_markup=kb.as_markup(),
+                parse_mode='HTML'
+            )
+            
+            # Cleanup source files
+            for file_path, thumb_path, _ in results:
+                if file_path.exists(): file_path.unlink()
+                if thumb_path and thumb_path.exists(): thumb_path.unlink()
+
+        # Stats
+        stats.add_download(
+            content_type='Playlist',
+            user_id=user_id,
+            username=stored_name,
+            platform='youtube',
+            url=url,
+            title=f"Playlist ({len(results)} items)"
+        )
+
+    except Exception as e:
+        logging.error(f"Playlist handler error: {e}")
+        try: await callback.message.edit_text(f"❌ Error processing playlist: {str(e)}")
+        except: pass
     await bot.edit_message_text(
         text="downloading...",
         inline_message_id=inline_message_id

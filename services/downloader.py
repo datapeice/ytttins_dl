@@ -225,6 +225,17 @@ def get_platform(url: str) -> str:
 def is_youtube_music(url: str) -> bool:
     return "music.youtube.com" in url
 
+def is_playlist(url: str) -> bool:
+    """Detect if the URL is a playlist or album."""
+    url_lower = url.lower()
+    # YouTube / Music playlists
+    if ("youtube.com" in url_lower or "youtu.be" in url_lower) and ("list=" in url_lower or "playlist" in url_lower):
+        return True
+    # YouTube Music albums (often playlists)
+    if "music.youtube.com" in url_lower and "browse/VLPL" in url:
+        return True
+    return False
+
 def unshorten_reddit_url(url: str, proxy_url: Optional[str]) -> str:
     if "/comments/" in url:
         return url
@@ -671,6 +682,11 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     # Exclude platforms that need query params: youtube, instagram, pornhub (viewkey)
     if '?' in url and platform not in ("youtube", "instagram", "pornhub"):
         url = url.split('?')[0]
+    
+    # Check for playlists first
+    if is_playlist(url) and (platform == "youtube" or is_youtube_music(url)):
+        logging.info(f"Downloading playlist: {url}")
+        return await _download_playlist_ytdlp(url, is_music=is_music, progress_callback=wrapped_callback if progress_callback else None)
     
     # === МЕТОД 1: YT-DLP (основной) ===
     ytdlp_error = None
@@ -1131,6 +1147,54 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
     # All attempts failed with 403/429
     raise last_error if last_error else Exception("All user-agent attempts failed")
 
+
+async def _download_playlist_ytdlp(url: str, is_music: bool = True, progress_callback: Callable = None) -> List[Tuple[Path, Optional[Path], dict]]:
+    """Download an entire playlist or album and return a list of results."""
+    unique_id_plist = uuid.uuid4().hex[:6]
+    cookie_file = DATA_DIR / "cookies.txt"
+    
+    ydl_opts_meta = {
+        'extract_flat': True,
+        'cookiefile': str(cookie_file) if cookie_file.exists() else None,
+        'quiet': True,
+    }
+    
+    results = []
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts_meta) as ydl:
+            plist_info = await asyncio.to_thread(ydl.extract_info, url, download=False)
+            
+        if not plist_info or 'entries' not in plist_info:
+            return []
+            
+        entries = list(plist_info['entries'])
+        total = len(entries)
+        logging.info(f"Detected playlist with {total} entries")
+        
+        for i, entry in enumerate(entries, 1):
+            if not entry: continue
+            entry_url = entry.get('url') or entry.get('webpage_url')
+            if not entry_url:
+                if 'id' in entry:
+                    entry_url = f"https://www.youtube.com/watch?v={entry['id']}"
+                else:
+                    continue
+            
+            if progress_callback:
+                await progress_callback(f"⏳ Downloading track {i}/{total}...")
+                
+            try:
+                # Use existing ytdlp_local for each entry
+                res = await _download_local_ytdlp(entry_url, is_music=is_music)
+                if res and res[0].exists():
+                    results.append(res)
+            except Exception as e:
+                logging.error(f"Failed to download playlist entry {i}: {e}")
+                
+        return results
+    except Exception as e:
+        logging.error(f"Playlist extraction error: {e}")
+        return []
 
 async def _download_local_tiktok(url: str, use_proxy: bool = False, progress_callback: Callable = None) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
     """Скачивание TikTok на VPS. Поддерживает видео (h264) и фото-слайдшоу."""

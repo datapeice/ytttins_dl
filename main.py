@@ -11,6 +11,7 @@ from config import BOT_TOKEN, TELEGRAM_API_URL
 from services.logger import setup_logging
 from handlers import user, admin
 from cleanup import delete_old_files
+from services import zip_service
 
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "").rstrip("/")
 # Когда используется локальный telegram-bot-api, он вызывает бота через внутреннюю
@@ -62,6 +63,64 @@ async def on_shutdown(bot: Bot):
     await bot.delete_webhook()
     logging.info("Webhook deleted")
 
+async def zip_cleanup_worker():
+    """Background worker to clean up expired ZIP files."""
+    while True:
+        try:
+            zip_service.run_zip_cleanup_task()
+        except Exception as e:
+            logging.error(f"ZIP cleanup error: {e}")
+        await asyncio.sleep(600) # Run every 10 minutes
+
+async def handle_zip_download_page(request):
+    """Serves the minimalistic download page for a ZIP file."""
+    secure_id = request.match_info.get('secure_id')
+    info = zip_service.get_zip_info(secure_id)
+    
+    if not info:
+        return web.Response(text="<h1>404 - Link expired or not found</h1><p>Files are stored for 24 hours only.</p>", content_type='text/html', status=404)
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Download Playlist</title>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }}
+            .card {{ background: #1e293b; padding: 2.5rem; border-radius: 1rem; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); text-align: center; max-width: 400px; width: 90%; border: 1px solid #334155; }}
+            h1 {{ font-size: 1.5rem; margin-bottom: 0.5rem; color: #38bdf8; }}
+            p {{ color: #94a3b8; font-size: 0.875rem; margin-bottom: 2rem; }}
+            .btn {{ display: inline-block; background: #38bdf8; color: #0f172a; text-decoration: none; padding: 0.75rem 2rem; border-radius: 0.5rem; font-weight: 600; transition: all 0.2s; }}
+            .btn:hover {{ background: #7dd3fc; transform: translateY(-2px); }}
+            .expiry {{ margin-top: 1.5rem; font-size: 0.75rem; color: #475569; }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>Ready to Download</h1>
+            <p>{info['name']}</p>
+            <a href="/dl/file/{secure_id}" class="btn">Download ZIP</a>
+            <div class="expiry">Link expires in 24 hours</div>
+        </div>
+    </body>
+    </html>
+    """
+    return web.Response(text=html, content_type='text/html')
+
+async def handle_zip_file_serve(request):
+    """Directly serves the ZIP file."""
+    secure_id = request.match_info.get('secure_id')
+    info = zip_service.get_zip_info(secure_id)
+    
+    if not info or not info['path'].exists():
+        return web.Response(text="File not found", status=404)
+        
+    return web.FileResponse(info['path'], headers={
+        'Content-Disposition': f'attachment; filename="{info["name"]}"'
+    })
+
 def main():
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN not found in environment variables.")
@@ -88,12 +147,20 @@ def main():
     dp.shutdown.register(on_shutdown)
 
     app = web.Application()
+    
+    # Routes
+    app.router.add_get('/dl/{secure_id}', handle_zip_download_page)
+    app.router.add_get('/dl/file/{secure_id}', handle_zip_file_serve)
+    
     webhook_requests_handler = SimpleRequestHandler(
         dispatcher=dp,
         bot=bot,
     )
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
+    
+    # Start background cleanup task
+    asyncio.get_event_loop().create_task(zip_cleanup_worker())
 
     logging.info(f"🚀 Bot starting webhook server on {WEBAPP_HOST}:{WEBAPP_PORT}...")
     web.run_app(app, host=WEBAPP_HOST, port=WEBAPP_PORT)
