@@ -916,9 +916,11 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
     is_youtube = "youtube.com" in url or "youtu.be" in url
     is_instagram = "instagram.com" in url
     
-    # Try multiple user-agents if we get 403
-    last_error = None
-    for attempt, user_agent in enumerate(USER_AGENTS, 1):
+    # Try multiple user-agents if we get 403/429
+    # Optimization for Reddit: limit retries since it often returns 429
+    max_attempts = 2 if is_reddit else len(USER_AGENTS)
+    
+    for attempt, user_agent in enumerate(USER_AGENTS[:max_attempts], 1):
         # First try with impersonate, fallback to without if it fails
         impersonate_modes = [True, False]
         if is_reddit:
