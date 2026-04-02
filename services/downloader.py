@@ -251,6 +251,160 @@ def unshorten_reddit_url(url: str, proxy_url: Optional[str]) -> str:
         logging.warning(f"Failed to unshorten Reddit URL: {e}")
         return url
 
+
+def resolve_facebook_share_url(url: str) -> str:
+    """Resolve facebook.com/share/r/... or fb.watch/... to canonical facebook.com/reel/ID URL."""
+    import re
+    # Already a direct/canonical URL
+    if re.search(r'facebook\.com/(reel|watch|video|videos)/[0-9]+', url):
+        return url
+    # Try to follow redirects to get the canonical URL
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
+    try:
+        resp = requests.head(url, headers=headers, allow_redirects=True, timeout=10)
+        resolved = resp.url
+        # Strip query params (tracking noise)
+        if '?' in resolved:
+            resolved = resolved.split('?')[0]
+        if resolved and 'facebook.com' in resolved and resolved != url:
+            logging.info(f"✅ Resolved Facebook URL: {url} → {resolved}")
+            return resolved
+    except Exception as e:
+        logging.warning(f"Failed to resolve Facebook share URL: {e}")
+    return url
+
+
+def _download_reddit_direct(url: str, proxy_url: Optional[str] = None) -> Optional[Path]:
+    """
+    Fallback: fetch Reddit post JSON API, extract v.redd.it HLS/DASH video URL,
+    download video+audio separately and merge with ffmpeg.
+    Returns Path to merged mp4, or None on failure.
+    """
+    import re, subprocess, tempfile
+
+    # Normalize URL: ensure it ends with .json and use old.reddit.com to avoid JS pages
+    post_url = url.rstrip('/')
+    if '?' in post_url:
+        post_url = post_url.split('?')[0]
+    json_url = post_url + '/.json'
+
+    proxies = None
+    if proxy_url:
+        pv = proxy_url.replace('socks5h', 'socks5')
+        proxies = {'http': pv, 'https': pv}
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (compatible; RedditBot/1.0; +https://github.com/ytttins)',
+        'Accept': 'application/json',
+    }
+
+    try:
+        resp = requests.get(json_url, headers=headers, proxies=proxies, timeout=15)
+        if resp.status_code == 429:
+            logging.warning("[REDDIT-DIRECT] Rate limited on JSON API")
+            return None
+        if resp.status_code != 200:
+            logging.warning(f"[REDDIT-DIRECT] JSON API returned {resp.status_code}")
+            return None
+        data = resp.json()
+    except Exception as e:
+        logging.warning(f"[REDDIT-DIRECT] Failed to fetch JSON: {e}")
+        return None
+
+    try:
+        post = data[0]['data']['children'][0]['data']
+        media = post.get('media') or post.get('secure_media') or {}
+        reddit_video = media.get('reddit_video', {})
+        video_url = reddit_video.get('fallback_url') or reddit_video.get('hls_url')
+        if not video_url:
+            # Try crosspost
+            xpost = (post.get('crosspost_parent_list') or [{}])[0]
+            xmedia = xpost.get('media') or xpost.get('secure_media') or {}
+            reddit_video = xmedia.get('reddit_video', {})
+            video_url = reddit_video.get('fallback_url') or reddit_video.get('hls_url')
+        if not video_url:
+            logging.warning("[REDDIT-DIRECT] No video URL found in post JSON")
+            return None
+
+        # Strip quality param to get best quality
+        video_url = video_url.split('?')[0]
+        # Derive audio URL: replace DASH_XXX with DASH_audio
+        audio_url = re.sub(r'DASH_\d+(\.mp4)?$', 'DASH_audio.mp4', video_url)
+
+        unique_id = uuid.uuid4().hex[:8]
+        video_tmp = DOWNLOADS_DIR / f"reddit_v_{unique_id}.mp4"
+        audio_tmp = DOWNLOADS_DIR / f"reddit_a_{unique_id}.mp4"
+        output_path = DOWNLOADS_DIR / f"reddit_{unique_id}.mp4"
+
+        dl_headers = {
+            'User-Agent': headers['User-Agent'],
+            'Referer': 'https://www.reddit.com/',
+        }
+
+        # Download video stream
+        logging.info(f"[REDDIT-DIRECT] Downloading video: {video_url}")
+        vr = requests.get(video_url, headers=dl_headers, proxies=proxies, stream=True, timeout=60)
+        if vr.status_code != 200:
+            logging.warning(f"[REDDIT-DIRECT] Video stream returned {vr.status_code}")
+            return None
+        with open(video_tmp, 'wb') as f:
+            for chunk in vr.iter_content(8192):
+                f.write(chunk)
+
+        # Try to download audio stream (may not exist for old posts)
+        has_audio = False
+        try:
+            ar = requests.get(audio_url, headers=dl_headers, proxies=proxies, stream=True, timeout=30)
+            if ar.status_code == 200:
+                with open(audio_tmp, 'wb') as f:
+                    for chunk in ar.iter_content(8192):
+                        f.write(chunk)
+                has_audio = True
+                logging.info("[REDDIT-DIRECT] Audio stream downloaded")
+        except Exception:
+            pass
+
+        # Merge with ffmpeg
+        if has_audio:
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', str(video_tmp),
+                '-i', str(audio_tmp),
+                '-c:v', 'copy', '-c:a', 'aac',
+                '-movflags', '+faststart',
+                str(output_path)
+            ]
+        else:
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', str(video_tmp),
+                '-c', 'copy',
+                str(output_path)
+            ]
+
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        # Cleanup temp files
+        for tmp in (video_tmp, audio_tmp):
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+
+        if result.returncode != 0:
+            logging.error(f"[REDDIT-DIRECT] ffmpeg failed: {result.stderr.decode()[:300]}")
+            return None
+
+        logging.info(f"[REDDIT-DIRECT] ✅ Downloaded and merged: {output_path}")
+        return output_path
+
+    except Exception as e:
+        logging.error(f"[REDDIT-DIRECT] Unexpected error: {e}")
+        return None
+
 def _run_ytdlp_extract(ydl_opts: Dict, url: str) -> Tuple[Dict, str]:
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -354,6 +508,17 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             url = resolved_url
         except Exception as e:
             logging.warning(f"Failed to resolve Reddit short URL via proxy: {e}")
+
+    # Resolve Facebook share URLs to canonical /reel/ID format before passing to yt-dlp
+    if ("facebook.com/share" in url or "fb.watch" in url) and "facebook.com/reel" not in url:
+        try:
+            resolved_fb = await asyncio.to_thread(resolve_facebook_share_url, url)
+            if resolved_fb != url:
+                url = resolved_fb
+            else:
+                logging.warning("[FB] Could not resolve share URL; yt-dlp will try anyway")
+        except Exception as e:
+            logging.warning(f"Failed to resolve Facebook share URL: {e}")
 
     platform = get_platform(url)
 
@@ -483,6 +648,31 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 return await _download_tiktok_tikwm(url)
             except Exception as tikwm_error:
                 logging.error(f"[TIKWM] ❌ Failed: {tikwm_error}")
+
+        # === МЕТОД 4: REDDIT DIRECT (fallback for Reddit 429/auth errors) ===
+        if platform == "reddit":
+            try:
+                logging.info(f"[REDDIT-DIRECT] Trying direct JSON API download: {url}")
+                reddit_file = await asyncio.to_thread(_download_reddit_direct, url, SOCKS_PROXY)
+                if reddit_file and reddit_file.exists():
+                    logging.info(f"[REDDIT-DIRECT] ✅ Success: {reddit_file.name}")
+                    # Generate thumbnail + probe dimensions
+                    w, h = probe_video_dimensions(reddit_file)
+                    thumb_path = DOWNLOADS_DIR / f"{reddit_file.stem}_thumb.jpg"
+                    if not generate_video_thumbnail(reddit_file, thumb_path):
+                        thumb_path = None
+                    meta = {
+                        'title': None,
+                        'uploader': None,
+                        'webpage_url': url,
+                        'duration': 0,
+                        'width': w,
+                        'height': h,
+                        'verified': False,
+                    }
+                    return reddit_file, thumb_path, meta
+            except Exception as reddit_direct_error:
+                logging.error(f"[REDDIT-DIRECT] ❌ Failed: {reddit_direct_error}")
         
         # Все методы провалились
         raise Exception(f"All download methods failed. YT-DLP error: {ytdlp_error}")
