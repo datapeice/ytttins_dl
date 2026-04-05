@@ -111,14 +111,20 @@ class TorrentService:
         output_dir = self.downloads_dir / f"torrent_{unique_id}"
         output_dir.mkdir(exist_ok=True)
         
-        # aria2c command
+        # aria2c command with BitTorrent optimizations
         cmd = [
             "aria2c",
             "--dir", str(output_dir),
             "--seed-time=0",
             "--summary-interval=6",
-            "--bt-stop-timeout=60", # Stop if no progress for 60s
+            "--bt-stop-timeout=120", # Wait up to 120s of no progress
             "--file-allocation=none",
+            "--enable-dht=true",
+            "--bt-enable-lpd=true",
+            "--bt-max-peers=100",
+            "--bt-request-peer-speed-limit=100K",
+            "--listen-port=16881-16890",
+            "--dht-listen-port=16881-16890",
             str(torrent_path)
         ]
         
