@@ -146,10 +146,14 @@ class TorrentService:
             "--file-allocation=none",
             "--enable-dht=true",
             "--bt-enable-lpd=true",
-            "--bt-max-peers=100",
-            "--bt-request-peer-speed-limit=100K",
+            "--enable-peer-exchange=true", # PEX helps find peers without tracker
+            "--bt-max-peers=120",
             "--listen-port=16881-16890",
             "--dht-listen-port=16881-16890",
+            "--bt-tracker-timeout=30",
+            "--bt-tracker-interval=60",
+            "--user-agent=Transmission/3.00", # Some trackers block aria2c
+            "--peer-id-prefix=-TR3000-",      # Impersonate Transmission
             str(torrent_path)
         ]
         
