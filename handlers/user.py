@@ -310,8 +310,8 @@ async def handle_search(message: types.Message):
 
     try:
         search_methods = [
-            ("yt music", f"ytmusicsearch1:{query}"),
             ("soundcloud", f"scsearch1:{query}"),
+            ("yt music", f"ytmusicsearch1:{query}"),
             ("youtube", f"ytsearch1:{query} official audio")
         ]
         
@@ -823,14 +823,21 @@ async def handle_format_selection(callback: types.CallbackQuery, bot: Bot):
                 title=file_path.stem if not isinstance(file_path, list) else metadata.get('title', 'Media')
             )
 
-            user_id = callback.from_user.id
+            user_id = callback.message.chat.id if callback.message else callback.from_user.id
             if file_path.exists():
                 await update_status("📤 Uploading to Telegram...")
                 caption = format_caption(metadata, 'youtube', url, is_music=is_music)
 
+                # Prepare reply arguments for groups
+                delivery_reply_kwargs = {}
+                if callback.message and callback.message.chat.type != 'private':
+                    # Use the same reply logic as messages
+                    if "reply_to_message_id" in callback.message.text: # Logic check - actually use message_id of original trigger if possible, but callback.message is the bot's own prompt
+                         pass # We'll just send to chat for now as callback.message is the bot's message
+
                 sent = await bot.send_audio(
-                    user_id,
-                    types.FSInputFile(file_path),
+                    chat_id=user_id,
+                    audio=types.FSInputFile(file_path),
                     thumbnail=types.FSInputFile(thumbnail_path) if thumbnail_path else None,
                     duration=int(metadata.get('duration', 0)),
                     caption=caption,
@@ -921,7 +928,7 @@ async def handle_resolution_selection(callback: types.CallbackQuery, bot: Bot):
                 title=file_path.stem if not isinstance(file_path, list) else metadata.get('title', 'Media')
             )
 
-            user_id = callback.from_user.id
+            user_id = callback.message.chat.id if callback.message else callback.from_user.id
             if file_path.exists():
                 await update_status("📤 Uploading to Telegram...")
                 caption = format_caption(metadata, 'youtube', url, is_music=False)
@@ -946,7 +953,7 @@ async def handle_resolution_selection(callback: types.CallbackQuery, bot: Bot):
                 if thumbnail_path:
                    video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
                 
-                sent = await bot.send_video(user_id, **video_kwargs)
+                sent = await bot.send_video(chat_id=user_id, **video_kwargs)
                 
                 if callback.inline_message_id:
                     media = types.InputMediaVideo(media=sent.video.file_id, caption=caption, parse_mode='HTML')
@@ -1031,6 +1038,7 @@ async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
         await callback.answer()
         action, request_id = callback.data.split(":", 2)[1:]
         user_id = callback.from_user.id
+        chat_id = callback.message.chat.id if callback.message else user_id
         message_id = callback.message.message_id if callback.message else None
         inline_message_id = callback.inline_message_id
         
@@ -1063,7 +1071,7 @@ async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
                 if thumbnail_path and thumbnail_path.exists():
                     audio_kwargs["thumbnail"] = types.FSInputFile(thumbnail_path)
                 
-                await bot.send_audio(user_id, **audio_kwargs)
+                await bot.send_audio(chat_id, **audio_kwargs)
                 # Small delay to avoid Telegram flood limits
                 await asyncio.sleep(1.5)
             except Exception as e:
@@ -1087,14 +1095,22 @@ async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
             kb.add(InlineKeyboardButton(text="⭐️ Support", callback_data="donate"))
             
             await bot.send_message(
-                user_id, 
+                chat_id, 
                 f"✅ All {len(results)} tracks from playlist sent individually!",
                 reply_markup=kb.as_markup()
             )
             # Cleanup all tracked files
-            for file_path, thumb_path, _ in results:
-                if file_path.exists(): file_path.unlink()
-                if thumb_path and thumb_path.exists(): thumb_path.unlink()
+            for res_item in results:
+                file_path, thumb_path, _ = res_item
+                # file_path might be a list (slideshow) or a Path
+                if isinstance(file_path, list):
+                    for p in file_path:
+                        if p.exists(): p.unlink()
+                elif file_path.exists(): 
+                    file_path.unlink()
+                    
+                if thumb_path and isinstance(thumb_path, Path) and thumb_path.exists(): 
+                    thumb_path.unlink()
 
         elif action == 'zip':
             await update_status("📦 Creating ZIP archive...")

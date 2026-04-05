@@ -34,6 +34,11 @@ def generate_video_thumbnail(video_path: Path, output_path: Path) -> bool:
     try:
         logging.info(f"Generating thumbnail for {video_path.name}")
         # Take a frame from 1 second in to avoid black start
+        search_methods = [
+            ("soundcloud", f"scsearch1:{query}"),
+            ("yt music", f"ytmusicsearch1:{query}"),
+            ("youtube", f"ytsearch1:{query} official audio")
+        ]
         cmd = [
             "ffmpeg", "-y",
             "-ss", "00:00:01",
@@ -219,7 +224,10 @@ def get_platform(url: str) -> str:
     elif "://t.me" in url_lower or "://telegram.me" in url_lower:
         return "unknown"
     elif "https://" in url_lower or "http://" in url_lower:
-        # yt-dlp supports 1800+ sites, try anyway
+        # Check if it's a direct media file first
+        if any(url_lower.endswith(ext) for ext in ('.mp4', '.mov', '.webm', '.m4v', '.m3u8', '.ts')):
+             return "video"
+        # yt-dlp supports 1800+ sites, try generic video classification
         return "video"
     else:
         return "unknown"
@@ -625,6 +633,106 @@ def _download_facebook_direct(url: str, proxy_url: Optional[str] = None) -> Opti
         return None
 
 
+def _download_generic_stream(url: str, proxy_url: Optional[str] = None) -> Optional[Path]:
+    """
+    Scrape any HTML page for video stream patterns (DASH, HLS, direct MP4) 
+    that might be hidden in JS or data attributes.
+    """
+    import re, requests
+    
+    proxies = None
+    if proxy_url:
+        pv = proxy_url.replace('socks5h', 'socks5')
+        proxies = {'http': pv, 'https': pv}
+
+    headers = {
+        'User-Agent': random.choice(USER_AGENTS),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
+
+    try:
+        resp = requests.get(url, headers=headers, proxies=proxies, timeout=15)
+        if resp.status_code != 200:
+            return None
+        html = resp.text
+
+        # Common patterns for video streams in HTML/JS
+        patterns = [
+            r'"file"\s*:\s*"([^"]+\.(?:mp4|m3u8|webm)[^"]*)"',
+            r'"src"\s*:\s*"([^"]+\.(?:mp4|m3u8|webm)[^"]*)"',
+            r'"video_url"\s*:\s*"([^"]+)"',
+            r'"playable_url"\s*:\s*"([^"]+)"',
+            r'"hls_url"\s*:\s*"([^"]+)"',
+            r'"contentUrl"\s*:\s*"([^"]+)"',
+            r'source\s+src\s*=\s*"([^"]+)"',
+            r'data-video-src\s*=\s*"([^"]+)"',
+            r'data-src\s*=\s*"([^"]+\.mp4[^"]*)"',
+            r'"video_src"\s*:\s*"([^"]+)"',
+        ]
+
+        video_url = None
+        for pattern in patterns:
+            match = re.search(pattern, html)
+            if match:
+                candidate = match.group(1).replace('\\/', '/').replace('\\u0025', '%').replace('\\u0026', '&')
+                if candidate.startswith('//'):
+                    candidate = 'https:' + candidate
+                elif candidate.startswith('/'):
+                    from urllib.parse import urljoin
+                    candidate = urljoin(url, candidate)
+                
+                # Filter out ads or obvious garbage
+                if 'ads' in candidate.lower() or 'pixel' in candidate.lower():
+                    continue
+                
+                video_url = candidate
+                logging.info(f"[GENERIC-STREAM] Found potential stream: {video_url[:100]}")
+                break
+
+        if not video_url:
+            # Try to find any mp4 link that looks like a main content
+            mp4_matches = re.findall(r'https?://[^"\s>]+\.mp4[^"\s>]*', html)
+            for candidate in mp4_matches:
+                 if 'ads' not in candidate.lower() and len(candidate) < 500:
+                     video_url = candidate
+                     break
+
+        if not video_url:
+            return None
+
+        # Download the stream
+        unique_id = uuid.uuid4().hex[:8]
+        output_path = DOWNLOADS_DIR / f"generic_{unique_id}.mp4"
+        
+        # If it's HLS (m3u8), we need ffmpeg
+        if '.m3u8' in video_url.lower():
+            logging.info(f"[GENERIC-STREAM] HLS detected, using ffmpeg to download: {video_url}")
+            cmd = [
+                'ffmpeg', '-y', '-i', video_url,
+                '-c', 'copy', '-bsf:a', 'aac_adtstoasc',
+                str(output_path)
+            ]
+            res = subprocess.run(cmd, capture_output=True, timeout=300)
+            if res.returncode == 0:
+                return output_path
+            return None
+
+        # Direct download for MP4
+        logging.info(f"[GENERIC-STREAM] Downloading direct MP4: {video_url}")
+        vr = requests.get(video_url, headers=headers, proxies=proxies, stream=True, timeout=120)
+        if vr.status_code == 200:
+            with open(output_path, 'wb') as f:
+                for chunk in vr.iter_content(8192):
+                    f.write(chunk)
+            return output_path
+
+    except Exception as e:
+        logging.error(f"[GENERIC-STREAM] Extraction error: {e}")
+    
+    return None
+
+
 def _run_ytdlp_extract(ydl_opts: Dict, url: str) -> Tuple[Dict, str]:
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -800,19 +908,20 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 
             return res
         
-        # Spotify через spotdl
+        # Spotify через song.link + yt-dlp (reliable) или spotdl (fallback)
         if platform == "spotify":
             try:
+                # Try to resolve to YT Music first for higher reliability
+                resolved_url = await _resolve_spotify_via_songlink(url)
+                if resolved_url:
+                    logging.info(f"[SPOTIFY] Resolved {url} to {resolved_url}")
+                    return await _download_local_ytdlp(resolved_url, is_music=True, progress_callback=wrapped_callback if progress_callback else None)
+                
                 logging.info(f"[SPOTIFY] Attempting spotdl: {url}")
                 return await _download_spotify_spotdl(url, progress_callback=wrapped_callback if progress_callback else None)
             except Exception as spot_err:
-                if "SPOTIFY_RATE_LIMIT" in str(spot_err):
-                    logging.warning(f"Spotify rate limit hit for {url}. Switching to search mode...")
-                    # Instead of direct link download, we can still use yt-dlp which searches for title first
-                    pass
-                else:
-                    logging.error(f"[SPOTIFY] ❌ spotdl failed: {spot_err}")
-                # Fallback continues to Method 1 (yt-dlp)
+                logging.error(f"[SPOTIFY] ❌ Failed: {spot_err}")
+                # Fallback continues to search mode in yt-dlp
         
         # YouTube/Instagram/музыка через универсальный метод
         return await _download_local_ytdlp(url, is_music, video_height=video_height, min_duration=min_duration, progress_callback=wrapped_callback if progress_callback else None)
@@ -933,6 +1042,25 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             except Exception as fb_err:
                 logging.error(f"[FB-DIRECT] ❌ Failed: {fb_err}")
 
+        # === МЕТОД 6: GENERIC VIDEO STREAM SCRAPE (Last resort) ===
+        if platform == "video" or ytdlp_error:
+            try:
+                logging.info(f"[GENERIC-STREAM] Trying manual stream extraction: {url}")
+                stream_file = await asyncio.to_thread(_download_generic_stream, url, SOCKS_PROXY)
+                if stream_file and stream_file.exists():
+                    logging.info(f"[GENERIC-STREAM] ✅ Success: {stream_file.name}")
+                    w, h = probe_video_dimensions(stream_file)
+                    gen_thumb = DOWNLOADS_DIR / f"{stream_file.stem}_thumb.jpg"
+                    if not generate_video_thumbnail(stream_file, gen_thumb):
+                        gen_thumb = None
+                    return stream_file, gen_thumb, {
+                        'title': 'Downloaded Video', 'uploader': None,
+                        'webpage_url': url, 'duration': 0,
+                        'width': int(w), 'height': int(h), 'verified': False,
+                    }
+            except Exception as gen_err:
+                logging.error(f"[GENERIC-STREAM] ❌ Failed: {gen_err}")
+
         # Все методы провалились
         raise Exception(f"All download methods failed. YT-DLP error: {ytdlp_error}")
     finally:
@@ -949,281 +1077,156 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
     is_youtube = "youtube.com" in url or "youtu.be" in url
     is_instagram = "instagram.com" in url
     
-    # Try multiple user-agents if we get 403/429
-    max_attempts = 2 if is_reddit else len(USER_AGENTS)
+    # Single attempt with optimal settings
+    attempt = 1
+    user_agent = USER_AGENTS[0]
+    use_impersonate = True
     
-    for attempt, user_agent in enumerate(USER_AGENTS[:max_attempts], 1):
-        # We use impersonate to bypass cloudflare/429
-        impersonate_modes = [True, False]
-        for use_impersonate in impersonate_modes:
+    try:
+        impersonate_target = IMPERSONATE_TARGETS[0]
+        is_facebook = "facebook.com" in url or "fb.watch" in url
+        if is_facebook:
+            impersonate_target = 'chrome-99'
+        
+        ydl_opts = {
+            'outtmpl': output_template,
+            'cookiefile': str(cookie_file) if cookie_file.exists() and cookie_file.is_file() and cookie_file.stat().st_size > 0 else None,
+            'noplaylist': True,
+            'quiet': False,
+            'verbose': True,
+            'legacy_server_connect': True,
+            'socket_timeout': 30,
+            'retries': 2,
+            'fragment_retries': 2,
+            'playlist_items': '1' if is_youtube else '1-5',
+            'max_filesize': 2048 * 1024 * 1024,
+            'exec_before_download': [],
+            'extractor_args': {
+                'reddit': {'impersonate': True}
+            },
+            'js_runtimes': {
+                'node': {'path': '/usr/local/bin/node'}
+            },
+            'remote_components': ['ejs:github'],
+            'fixup': 'never',
+        }
+
+        if min_duration > 0:
+            def duration_filter(info_dict, *, incomplete):
+                duration = info_dict.get('duration')
+                if duration and duration < min_duration:
+                    return f'Duration {duration}s is shorter than {min_duration}s'
+                return None
+            ydl_opts['match_filter'] = duration_filter
+        
+        ydl_opts['progress_hooks'] = []
+        browser_headers = {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
+            'Cache-Control': 'max-age=0',
+            'Sec-Ch-Ua': '"Chromium";v="120", "Google Chrome";v="120", "Not_A Brand";v="24"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"Windows"',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1',
+            'User-Agent': user_agent,
+        }
+        if is_facebook:
+            browser_headers['Sec-Ch-Ua'] = '" Not A;Brand";v="99", "Chromium";v="99", "Google Chrome";v="99"'
+            browser_headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36'
+        ydl_opts['http_headers'] = browser_headers
+        
+        if use_impersonate:
             try:
-                impersonate_target = IMPERSONATE_TARGETS[(attempt - 1) % len(IMPERSONATE_TARGETS)]
-                
-                # Facebook's Tahoe API fingerprints TLS — only chrome-99 works reliably
-                # (yt-dlp issue #15161: chrome-110 causes "Cannot parse data")
-                is_facebook = "facebook.com" in url or "fb.watch" in url
-                if is_facebook and use_impersonate:
-                    impersonate_target = 'chrome-99'
-                
-                ydl_opts = {
-                    'outtmpl': output_template,
-                    'cookiefile': str(cookie_file) if cookie_file.exists() and cookie_file.is_file() and cookie_file.stat().st_size > 0 else None,
-                    'noplaylist': True,
-                    'quiet': False,
-                    'verbose': True,
-                    'legacy_server_connect': True,  # GitHub: helps with old TLS configs & Cloudflare
-                    'socket_timeout': 30,  # Prevent hanging on slow/blocked connections
-                    'retries': 3,  # Retry failed fragments
-                    'fragment_retries': 3,  # Retry failed fragments
-                    'playlist_items': '1' if is_youtube else '1-5',  # Try multiple embeds for generic sites
-                    'noplaylist': True,  # Skip playlists
-                    'max_filesize': 2048 * 1024 * 1024,  # 2GB limit for safety (Telegram max)
-                    'external_downloader': 'aria2c',
-                    'external_downloader_args': ['--max-connection-per-server=4', '--split=4', '--min-split-size=1M'],
-                    'exec_before_download': [],  # Prevent PhantomJS usage
-                    'extractor_args': {
-                        'reddit': {
-                            'impersonate': True,
-                        },
-                        'pornhub': {
-                            'no_js': True
-                        }
-                    },
-                    'js_runtimes': {
-                        'node': {'path': '/usr/local/bin/node'}
-                    },
-                    'remote_components': ['ejs:github'],
-                    'fixup': 'never',  # Skip redundant container fixups
-                }
-
-                if min_duration > 0:
-                    def duration_filter(info_dict, *, incomplete):
-                        duration = info_dict.get('duration')
-                        if duration and duration < min_duration:
-                            return f'Duration {duration}s is shorter than {min_duration}s'
-                        return None
-                    ydl_opts['match_filter'] = duration_filter
-                
-                # No progress_hooks used here anymore to keep UI clean
-                ydl_opts['progress_hooks'] = []
-                
-                # Расширенные HTTP-заголовки для имитации браузера
-                browser_headers = {
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
-                    'Cache-Control': 'max-age=0',
-                    'Sec-Ch-Ua': '"Chromium";v="120", "Google Chrome";v="120", "Not_A Brand";v="24"',
-                    'Sec-Ch-Ua-Mobile': '?0',
-                    'Sec-Ch-Ua-Platform': '"Windows"',
-                    'Sec-Fetch-Dest': 'document',
-                    'Sec-Fetch-Mode': 'navigate',
-                    'Sec-Fetch-Site': 'none',
-                    'Sec-Fetch-User': '?1',
-                    'Upgrade-Insecure-Requests': '1',
-                    'User-Agent': user_agent,
-                }
-                # Facebook: use headers matching Chrome 99 to be consistent with impersonate target
-                if is_facebook and use_impersonate:
-                    browser_headers['Sec-Ch-Ua'] = '" Not A;Brand";v="99", "Chromium";v="99", "Google Chrome";v="99"'
-                    browser_headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36'
-                ydl_opts['http_headers'] = browser_headers
-                
-                # Имитация TLS-отпечатка браузера через curl-cffi (если поддерживается)
-                if use_impersonate:
-                    try:
-                        target_obj = build_impersonate_target(impersonate_target)
-                        if ImpersonateTarget and not isinstance(target_obj, ImpersonateTarget):
-                            logging.warning(
-                                f"⚠️ Impersonate target not supported on this runtime: {impersonate_target}"
-                            )
-                            use_impersonate = False
-                        else:
-                            ydl_opts['impersonate'] = target_obj
-                            logging.info(f"🔒 Attempting TLS impersonation: {impersonate_target} + User-Agent: {user_agent[:50]}...")
-                    except Exception as imp_err:
-                        logging.error(f"❌ Failed to set impersonate={impersonate_target}: {imp_err}")
-                        # Don't retry with impersonate if setting fails
-                        use_impersonate = False
-                
-                # Reddit-specific configuration to avoid blocks
-                if "reddit.com" in url or "redd.it" in url:
-                    ydl_opts['extractor_args'] = {
-                        'reddit': {
-                            'user_agent': user_agent
-                        }
-                    }
-
-                if is_instagram:
-                    ydl_opts['noplaylist'] = False
-                    ydl_opts['extractor_args'] = {
-                        'instagram': {
-                            'include_videos': True,
-                            'include_pictures': True,
-                        }
-                    }
-                
-                # Добавляем или ПРИНУДИТЕЛЬНО ОТКЛЮЧАЕМ прокси
-                if use_proxy and SOCKS_PROXY:
-                    ydl_opts['proxy'] = SOCKS_PROXY
+                target_obj = build_impersonate_target(impersonate_target)
+                if ImpersonateTarget and isinstance(target_obj, ImpersonateTarget):
+                    ydl_opts['impersonate'] = target_obj
+                    logging.info(f"🔒 Attempting TLS impersonation: {impersonate_target}")
                 else:
-                    # Принудительно отключаем прокси (пустая строка перебивает ENV переменные)
-                    ydl_opts['proxy'] = ''
-                
-                if is_music:
-                    # Только аудио (приоритет форматов без конвертации для скорости)
-                    ydl_opts['format'] = 'bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio/best'
-                    ydl_opts['postprocessors'] = [{
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': '320',
-                    }]
-                else:
-                    ydl_opts['merge_output_format'] = 'mp4'
-                    if video_height:
-                        ydl_opts['format'] = f"bestvideo[height<={video_height}]+bestaudio/best[height<={video_height}]/bestvideo+bestaudio/best"
-                    else:
-                        # Видео с H.264 кодеком
-                        ydl_opts['format'] = 'bestvideo[vcodec^=h264]+bestaudio/bestvideo[vcodec^=avc]+bestaudio/bestvideo+bestaudio/best[vcodec^=h264]/best[vcodec^=avc]/best'
-                
-                # Add progress hook to log to console (so user sees life in docker logs)
-                last_logged_percent = -1
-                def console_progress_hook(d):
-                    nonlocal last_logged_percent
-                    if d['status'] == 'downloading':
-                        try:
-                            p_str = d.get('_percent_str', '0%').replace('%','').strip()
-                            p = int(float(p_str))
-                            if p >= last_logged_percent + 2:
-                                last_logged_percent = (p // 2) * 2
-                                logging.info(f"[YT-DLP] Download progress: {p}% ({d.get('_speed_str', 'N/A')})")
-                        except: pass
-                
-                ydl_opts['progress_hooks'] = [console_progress_hook]
-                
+                    use_impersonate = False
+            except Exception as imp_err:
+                logging.error(f"❌ Failed to set impersonate: {imp_err}")
+                use_impersonate = False
+        
+        if is_instagram:
+            ydl_opts['noplaylist'] = False
+            ydl_opts['extractor_args']['instagram'] = {'include_videos': True, 'include_pictures': True}
+        
+        ydl_opts['proxy'] = SOCKS_PROXY if use_proxy and SOCKS_PROXY else ''
+        
+        if is_music:
+            ydl_opts['format'] = 'bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio/best'
+            ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '320'}]
+        else:
+            ydl_opts['merge_output_format'] = 'mp4'
+            if video_height:
+                ydl_opts['format'] = f"bestvideo[height<={video_height}]+bestaudio/best[height<={video_height}]/bestvideo+bestaudio/best"
+            else:
+                ydl_opts['format'] = 'bestvideo[vcodec^=h264]+bestaudio/bestvideo[vcodec^=avc]+bestaudio/bestvideo+bestaudio/best[vcodec^=h264]/best[vcodec^=avc]/best'
+        
+        last_logged_percent = -1
+        def console_progress_hook(d):
+            nonlocal last_logged_percent
+            if d['status'] == 'downloading':
                 try:
-                    info, prepared_name = await asyncio.to_thread(_run_ytdlp_extract, ydl_opts, url)
-                except Exception as extract_error:
-                    error_text = str(extract_error)
-                    if "Requested format is not available" in error_text:
-                        ydl_opts['format'] = 'bestvideo+bestaudio/best'
-                        ydl_opts.pop('merge_output_format', None)
-                        info, prepared_name = await asyncio.to_thread(_run_ytdlp_extract, ydl_opts, url)
-                    else:
-                        raise
+                    p_str = d.get('_percent_str', '0%').replace('%','').strip()
+                    p = int(float(p_str))
+                    if p >= last_logged_percent + 2:
+                        last_logged_percent = (p // 2) * 2
+                        logging.info(f"[YT-DLP] Download progress: {p}%")
+                except: pass
+        
+        ydl_opts['progress_hooks'] = [console_progress_hook]
+        info, prepared_name = await asyncio.to_thread(_run_ytdlp_extract, ydl_opts, url)
 
-                metadata = {
-                    'title': None if info.get('title') == 'Unknown' or info.get('title') == 'None' else info.get('title', 'Media'),
-                    'uploader': None if info.get('uploader') == 'Unknown' or info.get('uploader') == 'None' else info.get('uploader'),
-                    'webpage_url': info.get('webpage_url', url),
-                    'duration': info.get('duration', 0),
-                    'width': info.get('width', 0),
-                    'height': info.get('height', 0),
-                    'verified': info.get('creator_is_verified') or info.get('uploader_is_verified') or info.get('verified') or False,
-                }
-                
-                # Check description for 'Unknown' as well
-                if info.get('description') == 'Unknown' or info.get('description') == 'None':
-                    metadata['description'] = None
-                else:
-                    metadata['description'] = info.get('description')
+        metadata = {
+            'title': None if info.get('title') in ('Unknown', 'None') else info.get('title', 'Media'),
+            'uploader': None if info.get('uploader') in ('Unknown', 'None') else info.get('uploader'),
+            'webpage_url': info.get('webpage_url', url),
+            'duration': info.get('duration', 0),
+            'width': info.get('width', 0),
+            'height': info.get('height', 0),
+            'verified': info.get('creator_is_verified') or info.get('uploader_is_verified') or info.get('verified') or False,
+        }
+        
+        downloaded_files = list(DOWNLOADS_DIR.glob(f"*{unique_id}*"))
+        if not downloaded_files:
+            path = Path(prepared_name)
+            if path.exists(): downloaded_files = [path]
+            else: raise ValueError("Download failed: file not found")
 
-                # Находим скачанный файл
-                downloaded_files = list(DOWNLOADS_DIR.glob(f"*{unique_id}*"))
+        if is_instagram and info.get("entries"):
+            downloaded_files.sort(key=lambda p: p.name)
+            return downloaded_files, None, metadata
 
-                if not downloaded_files:
-                    path = Path(prepared_name)
-                    if path.exists():
-                        downloaded_files = [path]
-                    else:
-                        raise ValueError("Download failed: file not found")
+        file_path = _select_best_downloaded_file(downloaded_files)
+        if not skip_cleanup: _cleanup_extra_files(downloaded_files, file_path)
+        
+        if file_path.suffix == '.unknown_video':
+            if file_path.stat().st_size < 500 * 1024:
+                file_path.unlink()
+                raise ValueError("File too small.")
+            new_path = file_path.with_suffix('.mp4')
+            file_path.rename(new_path)
+            file_path = new_path
+        
+        final_thumbnail = None
+        if not is_music:
+            if not metadata.get('width') or not metadata.get('height'):
+                w, h = probe_video_dimensions(file_path)
+                metadata['width'], metadata['height'] = w, h
+            thumbnail_path = DOWNLOADS_DIR / f"{file_path.stem}_thumb.jpg"
+            if generate_video_thumbnail(file_path, thumbnail_path): final_thumbnail = thumbnail_path
 
-                if is_instagram and info.get("entries"):
-                    downloaded_files.sort(key=lambda p: p.name)
-                    return downloaded_files, None, metadata
-
-                file_path = _select_best_downloaded_file(downloaded_files)
-                if not skip_cleanup:
-                    _cleanup_extra_files(downloaded_files, file_path)
-                
-                if file_path.suffix == '.unknown_video':
-                    fsize = file_path.stat().st_size
-                    if fsize < 500 * 1024: # Less than 500KB - likely a placeholder/error page
-                        file_path.unlink()
-                        raise ValueError(f"Downloaded file is too small ({fsize/1024:.1f}KB) and has unknown format.")
-                    else:
-                        logging.info(f"Allowing .unknown_video file due to significant size: {fsize/1024/1024:.1f}MB")
-                        # Rename it to .mp4 so Telegram shows it correctly
-                        new_path = file_path.with_suffix('.mp4')
-                        try:
-                            file_path.rename(new_path)
-                            file_path = new_path
-                            logging.info(f"Renamed .unknown_video to {file_path.name} for better Telegram compatibility")
-                        except Exception as rename_err:
-                            logging.error(f"Failed to rename .unknown_video: {rename_err}")
-                
-                logging.info(f"Downloaded: {file_path.name}")
-                
-                # Generate thumbnail if missing and mandatory probe for dimensions
-                final_thumbnail = None
-                if not is_music:
-                    if not metadata.get('width') or not metadata.get('height'):
-                        w, h = probe_video_dimensions(file_path)
-                        metadata['width'] = w
-                        metadata['height'] = h
+        return file_path, final_thumbnail, metadata
                     
-                    thumbnail_path = DOWNLOADS_DIR / f"{file_path.stem}_thumb.jpg"
-                    if generate_video_thumbnail(file_path, thumbnail_path):
-                        final_thumbnail = thumbnail_path
-
-                if use_impersonate and attempt > 1:
-                    logging.info(f"✅ Success with user-agent {attempt}/{len(USER_AGENTS)} + impersonate={impersonate_target}")
-                elif not use_impersonate:
-                    logging.info(f"✅ Success without impersonate (attempt {attempt}/{len(USER_AGENTS)})")
-
-                return file_path, final_thumbnail, metadata
-                    
-            except Exception as e:
-                error_str = str(e)
-                error_type = type(e).__name__
-                
-                # Detailed diagnostics for AssertionError (curl_cffi issue)
-                if isinstance(e, AssertionError):
-                    import traceback
-                    tb_lines = traceback.format_exception(type(e), e, e.__traceback__)
-                    tb_str = ''.join(tb_lines[-5:])  # Last 5 lines
-                    logging.error(f"❌ AssertionError in yt-dlp (curl_cffi failure):")
-                    logging.error(f"   Target: {impersonate_target if use_impersonate else 'none'}")
-                    logging.error(f"   Message: {error_str if error_str else '(empty)'}")
-                    logging.error(f"   Traceback (last 5 lines):\n{tb_str}")
-                
-                # If impersonate failed, try without it
-                if use_impersonate and (not error_str or "impersonate" in error_str.lower() or error_type == "AssertionError"):
-                    logging.warning(f"⚠️ Impersonate failed ({error_type}): {error_str[:100] if error_str else 'empty'}")
-                    logging.info(f"Retrying attempt {attempt} without TLS impersonation...")
-                    continue
-                
-                # Check if it's a 403 error
-                if "403" in error_str or "Blocked" in error_str or "Forbidden" in error_str:
-                    logging.warning(f"Attempt {attempt}/{len(USER_AGENTS)} failed with 403: {error_str[:150]}")
-                    last_error = e
-                    if attempt < len(USER_AGENTS):
-                        logging.info(f"Retrying with different user-agent...")
-                        break  # Break inner loop, continue outer loop
-
-                # Check if it's a 429 rate-limit error — retry with backoff
-                if "429" in error_str or "Too Many Requests" in error_str:
-                    logging.warning(f"Attempt {attempt}/{len(USER_AGENTS)} failed with 429 (rate limit): {error_str[:150]}")
-                    last_error = e
-                    if attempt < len(USER_AGENTS):
-                        sleep_secs = 2 * attempt  # 2s, 4s, 6s …
-                        logging.info(f"Rate-limited — sleeping {sleep_secs}s before retry with different user-agent...")
-                        await asyncio.sleep(sleep_secs)
-                        break  # Break inner loop, continue outer loop
-
-                # If not 403/429, raise immediately
-                logging.error(f"YT-DLP error: {error_str[:200]}")
-                raise e
+    except Exception as e:
+        logging.error(f"YT-DLP critical error: {str(e)[:200]}")
+        raise e
     
     # All attempts failed with 403/429
     raise last_error if last_error else Exception("All user-agent attempts failed")
@@ -1544,6 +1547,25 @@ async def _download_playlist_ytdlp(url: str, is_music: bool = True, progress_cal
     except Exception as e:
         logging.error(f"Playlist download error: {e}")
         return []
+
+async def _resolve_spotify_via_songlink(url: str) -> str:
+    """Helper to resolve Spotify URL to YouTube Music using Odesli (song.link)."""
+    import aiohttp
+    try:
+        api_url = f"https://api.song.link/v1-alpha.1/links?url={url}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url, timeout=10) as resp:
+                if resp.status_code == 200:
+                    data = await resp.json()
+                    # Try to find YouTube Music link
+                    links = data.get('linksByPlatform', {})
+                    if 'youtubeMusic' in links:
+                        return links['youtubeMusic']['url']
+                    if 'youtube' in links:
+                        return links['youtube']['url']
+    except Exception as e:
+        logging.error(f"Songlink resolution failed: {e}")
+    return ""
 
 async def _download_spotify_spotdl(url: str, progress_callback: Optional[Callable] = None) -> Tuple[Path, Optional[Path], Dict]:
     """Download Spotify track using spotdl CLI."""
