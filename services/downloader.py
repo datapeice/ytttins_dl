@@ -34,11 +34,6 @@ def generate_video_thumbnail(video_path: Path, output_path: Path) -> bool:
     try:
         logging.info(f"Generating thumbnail for {video_path.name}")
         # Take a frame from 1 second in to avoid black start
-        search_methods = [
-            ("soundcloud", f"scsearch1:{query}"),
-            ("yt music", f"ytmusicsearch1:{query}"),
-            ("youtube", f"ytsearch1:{query} official audio")
-        ]
         cmd = [
             "ffmpeg", "-y",
             "-ss", "00:00:01",
@@ -639,96 +634,110 @@ def _download_generic_stream(url: str, proxy_url: Optional[str] = None) -> Optio
     that might be hidden in JS or data attributes.
     """
     import re, requests
+    from urllib.parse import urljoin
     
     proxies = None
     if proxy_url:
         pv = proxy_url.replace('socks5h', 'socks5')
         proxies = {'http': pv, 'https': pv}
 
+    user_agent = random.choice(USER_AGENTS)
     headers = {
-        'User-Agent': random.choice(USER_AGENTS),
+        'User-Agent': user_agent,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': url
     }
 
     try:
-        resp = requests.get(url, headers=headers, proxies=proxies, timeout=15)
+        resp = requests.get(url, headers=headers, proxies=proxies, timeout=15, allow_redirects=True)
         if resp.status_code != 200:
             return None
         html = resp.text
 
-        # Common patterns for video streams in HTML/JS
+        # Patterns for video streams, prioritized by likely quality/directness
         patterns = [
             r'"file"\s*:\s*"([^"]+\.(?:mp4|m3u8|webm)[^"]*)"',
             r'"src"\s*:\s*"([^"]+\.(?:mp4|m3u8|webm)[^"]*)"',
             r'"video_url"\s*:\s*"([^"]+)"',
             r'"playable_url"\s*:\s*"([^"]+)"',
             r'"hls_url"\s*:\s*"([^"]+)"',
-            r'"contentUrl"\s*:\s*"([^"]+)"',
             r'source\s+src\s*=\s*"([^"]+)"',
             r'data-video-src\s*=\s*"([^"]+)"',
             r'data-src\s*=\s*"([^"]+\.mp4[^"]*)"',
-            r'"video_src"\s*:\s*"([^"]+)"',
         ]
 
-        video_url = None
+        found_urls = []
         for pattern in patterns:
-            match = re.search(pattern, html)
-            if match:
+            matches = re.finditer(pattern, html)
+            for match in matches:
                 candidate = match.group(1).replace('\\/', '/').replace('\\u0025', '%').replace('\\u0026', '&')
                 if candidate.startswith('//'):
                     candidate = 'https:' + candidate
                 elif candidate.startswith('/'):
-                    from urllib.parse import urljoin
                     candidate = urljoin(url, candidate)
-                
-                # Filter out ads or obvious garbage
-                if 'ads' in candidate.lower() or 'pixel' in candidate.lower():
+                elif not candidate.startswith('http'):
                     continue
                 
-                video_url = candidate
-                logging.info(f"[GENERIC-STREAM] Found potential stream: {video_url[:100]}")
-                break
+                # Filter out ads or obvious garbage
+                low_cand = candidate.lower()
+                if any(x in low_cand for x in ['ads', 'pixel', 'tracking', '/ad/']):
+                    continue
+                
+                if candidate not in found_urls:
+                    found_urls.append(candidate)
 
-        if not video_url:
-            # Try to find any mp4 link that looks like a main content
-            mp4_matches = re.findall(r'https?://[^"\s>]+\.mp4[^"\s>]*', html)
-            for candidate in mp4_matches:
-                 if 'ads' not in candidate.lower() and len(candidate) < 500:
-                     video_url = candidate
-                     break
+        if not found_urls:
+            # Fallback scan for any mp4/m3u8 link
+            ext_matches = re.findall(r'https?://[^"\s>]+(?:\.mp4|\.m3u8)[^"\s>]*', html)
+            for cand in ext_matches:
+                 if 'ads' not in cand.lower() and cand not in found_urls:
+                     found_urls.append(cand)
 
-        if not video_url:
+        if not found_urls:
             return None
 
-        # Download the stream
+        # Prefer higher quality (avoid 240p/144p if better exists)
+        video_url = found_urls[0]
+        for cand in found_urls:
+            low_cand = cand.lower()
+            if any(q in low_cand for q in ['720p', '1080p', '480p', 'hd']):
+                video_url = cand
+                break
+            if '240p' in video_url.lower() and '240p' not in low_cand:
+                video_url = cand
+
+        logging.info(f"[GENERIC-STREAM] Best stream found: {video_url[:100]}")
+
         unique_id = uuid.uuid4().hex[:8]
         output_path = DOWNLOADS_DIR / f"generic_{unique_id}.mp4"
         
-        # If it's HLS (m3u8), we need ffmpeg
+        # HLS Download
         if '.m3u8' in video_url.lower():
-            logging.info(f"[GENERIC-STREAM] HLS detected, using ffmpeg to download: {video_url}")
+            logging.info(f"[GENERIC-STREAM] Starting HLS download via ffmpeg...")
             cmd = [
                 'ffmpeg', '-y', '-i', video_url,
+                '-headers', f'User-Agent: {user_agent}\r\nReferer: {url}\r\n',
                 '-c', 'copy', '-bsf:a', 'aac_adtstoasc',
                 str(output_path)
             ]
-            res = subprocess.run(cmd, capture_output=True, timeout=300)
-            if res.returncode == 0:
+            res = subprocess.run(cmd, capture_output=True, timeout=600)
+            if res.returncode == 0 and output_path.exists() and output_path.stat().st_size > 1000:
                 return output_path
             return None
 
-        # Direct download for MP4
-        logging.info(f"[GENERIC-STREAM] Downloading direct MP4: {video_url}")
-        vr = requests.get(video_url, headers=headers, proxies=proxies, stream=True, timeout=120)
+        # Direct MP4 Download
+        logging.info(f"[GENERIC-STREAM] Downloading binary stream...")
+        vr = requests.get(video_url, headers=headers, proxies=proxies, stream=True, timeout=300)
         if vr.status_code == 200:
             with open(output_path, 'wb') as f:
-                for chunk in vr.iter_content(8192):
+                for chunk in vr.iter_content(65536):
                     f.write(chunk)
-            return output_path
+            if output_path.exists() and output_path.stat().st_size > 1000:
+                return output_path
 
     except Exception as e:
-        logging.error(f"[GENERIC-STREAM] Extraction error: {e}")
+        logging.error(f"[GENERIC-STREAM] Critical failure: {e}")
     
     return None
 
