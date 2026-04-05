@@ -698,14 +698,25 @@ def _download_generic_stream(url: str, proxy_url: Optional[str] = None) -> Optio
             return None
 
         # Prefer higher quality (avoid 240p/144p if better exists)
-        video_url = found_urls[0]
+        # Clean candidates from trailing commas/bracket artifacts often found in JS
+        cleaned_urls = []
         for cand in found_urls:
+            # Remove trailing part after a comma if it looks like JS array [480p] etc.
+            # but keep it if it's part of query string. 
+            # Usually adult sites have "url","[quality]"
+            c = cand.rstrip(',').rstrip(']').strip()
+            if ',' in c and not any(x in c.split(',')[-1] for x in ['mp4','m3u8','?','=']):
+                c = c.split(',')[0].strip('"').strip("'")
+            if c not in cleaned_urls:
+                cleaned_urls.append(c)
+
+        video_url = cleaned_urls[0]
+        for cand in cleaned_urls:
             low_cand = cand.lower()
-            if any(q in low_cand for q in ['720p', '1080p', '480p', 'hd']):
+            if any(q in low_cand for q in ['1080p', '720p', '480p', 'hd']):
                 video_url = cand
-                break
-            if '240p' in video_url.lower() and '240p' not in low_cand:
-                video_url = cand
+                if '1080p' in low_cand or '720p' in low_cand: 
+                    break # Stop at first high-quality link
 
         logging.info(f"[GENERIC-STREAM] Best stream found: {video_url[:100]}")
 
