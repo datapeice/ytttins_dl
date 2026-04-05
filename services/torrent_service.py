@@ -132,14 +132,17 @@ class TorrentService:
         
         last_progress_time = asyncio.get_event_loop().time()
         start_time = last_progress_time
-        has_seeds_ever = False
+        has_health_ever = False
         last_status_text = ""
+        
+        # Stall detection timeout (increased to 90s for slower trackers)
+        STALL_TIMEOUT = 90
         
         while True:
             try:
                 line = await asyncio.wait_for(process.stdout.readline(), timeout=1.0)
             except asyncio.TimeoutError:
-                if asyncio.get_event_loop().time() - start_time > 45 and not has_seeds_ever:
+                if asyncio.get_event_loop().time() - start_time > STALL_TIMEOUT and not has_health_ever:
                     process.terminate()
                     raise Exception("No seeds/peers found. This torrent appears to be dead (cannot download).")
                 continue
@@ -153,7 +156,6 @@ class TorrentService:
             percent_match = re.search(r"\((\d+)%\)", line_str) or re.search(r"(\d+)%", line_str)
             sp_match = re.search(r"[(\[]S:(\d+)[, ]+P:(\d+)[\)\]]", line_str)
             if not sp_match:
-                # Try a broader match for Seeds/Peers
                 sp_match = re.search(r"S:(\d+).*P:(\d+)", line_str)
             
             cn_match = re.search(r"CN:(\d+)", line_str)
@@ -164,30 +166,34 @@ class TorrentService:
             
             if percent_match:
                 status_parts.append(f"Downloading: {percent_match.group(1)}%")
+                if int(percent_match.group(1)) > 0:
+                    has_health_ever = True
             
             if sp_match:
                 seeds = int(sp_match.group(1))
                 peers = int(sp_match.group(2))
                 if seeds > 0 or peers > 0:
-                    has_seeds_ever = True
+                    has_health_ever = True
                 status_parts.append(f"Seeds: {seeds} | Peers: {peers}")
             elif cn_match:
-                # If S/P not found, at least show connections
                 status_parts.append(f"Connections: {cn_match.group(1)}")
             
             if dl_match:
+                speed_val = float(dl_match.group(1))
+                if speed_val > 0:
+                    has_health_ever = True
                 status_parts.append(f"Speed: {dl_match.group(1)}{dl_match.group(2)}")
             
             if status_parts:
                 status_text = "\n".join(status_parts)
-                
+            
             if status_text and status_text != last_status_text:
                 if progress_callback:
                     await progress_callback(status_text)
                 last_status_text = status_text
                 
             # Periodic check for dead torrents if stuck at start
-            if asyncio.get_event_loop().time() - start_time > 45 and not has_seeds_ever:
+            if asyncio.get_event_loop().time() - start_time > STALL_TIMEOUT and not has_health_ever:
                 process.terminate()
                 raise Exception("No seeds/peers found. This torrent appears to be dead (cannot download).")
         
