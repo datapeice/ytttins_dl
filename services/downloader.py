@@ -871,8 +871,8 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
     platform = get_platform(url)
 
     # Strip query parameters (they often confuse extractors or contain tracking)
-    # Exclude platforms that need query params: youtube, instagram, pornhub (viewkey)
-    if '?' in url and platform not in ("youtube", "instagram", "pornhub"):
+    # Exclude platforms that need query params: youtube, pornhub (viewkey)
+    if '?' in url and platform not in ("youtube", "pornhub"):
         url = url.split('?')[0]
     
     # Check for playlists first
@@ -1181,6 +1181,10 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
         if is_music:
             ydl_opts['format'] = 'bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio/best'
             ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '320'}]
+        elif is_instagram:
+            # More lenient format for Instagram to handle photo+video carousels
+            ydl_opts['format'] = 'bestvideo+bestaudio/best'
+            ydl_opts['merge_output_format'] = 'mp4'
         else:
             ydl_opts['merge_output_format'] = 'mp4'
             if video_height:
@@ -1252,53 +1256,6 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
     raise last_error if last_error else Exception("All user-agent attempts failed")
 
 
-async def _download_playlist_ytdlp(url: str, is_music: bool = True, progress_callback: Callable = None) -> List[Tuple[Path, Optional[Path], dict]]:
-    """Download an entire playlist or album and return a list of results."""
-    unique_id_plist = uuid.uuid4().hex[:6]
-    cookie_file = DATA_DIR / "cookies.txt"
-    
-    ydl_opts_meta = {
-        'extract_flat': True,
-        'cookiefile': str(cookie_file) if cookie_file.exists() else None,
-        'quiet': True,
-    }
-    
-    results = []
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts_meta) as ydl:
-            plist_info = await asyncio.to_thread(ydl.extract_info, url, download=False)
-            
-        if not plist_info or 'entries' not in plist_info:
-            return []
-            
-        entries = list(plist_info['entries'])
-        total = len(entries)
-        logging.info(f"Detected playlist with {total} entries")
-        
-        for i, entry in enumerate(entries, 1):
-            if not entry: continue
-            entry_url = entry.get('url') or entry.get('webpage_url')
-            if not entry_url:
-                if 'id' in entry:
-                    entry_url = f"https://www.youtube.com/watch?v={entry['id']}"
-                else:
-                    continue
-            
-            if progress_callback:
-                await progress_callback(f"⏳ Downloading track {i}/{total}...")
-                
-            try:
-                # Use existing ytdlp_local for each entry
-                res = await _download_local_ytdlp(entry_url, is_music=is_music)
-                if res and res[0].exists():
-                    results.append(res)
-            except Exception as e:
-                logging.error(f"Failed to download playlist entry {i}: {e}")
-                
-        return results
-    except Exception as e:
-        logging.error(f"Playlist extraction error: {e}")
-        return []
 
 async def _download_local_tiktok(url: str, use_proxy: bool = False, progress_callback: Callable = None) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
     """Скачивание TikTok на VPS. Поддерживает видео (h264) и фото-слайдшоу."""
@@ -1575,7 +1532,7 @@ async def _resolve_spotify_via_songlink(url: str) -> str:
         api_url = f"https://api.song.link/v1-alpha.1/links?url={url}"
         async with aiohttp.ClientSession() as session:
             async with session.get(api_url, timeout=10) as resp:
-                if resp.status_code == 200:
+                if resp.status == 200:
                     data = await resp.json()
                     # Try to find YouTube Music link
                     links = data.get('linksByPlatform', {})
@@ -1596,7 +1553,6 @@ async def _download_spotify_spotdl(url: str, progress_callback: Optional[Callabl
     cmd = [
         "python3", "-m", "spotdl", "download", url,
         "--output", f"{DOWNLOADS_DIR}/%(title)s - %(artist)s_{unique_id}.%(ext)s",
-        "--ignore-errors",  # Bypass 429 on some metadata steps
         "--no-cache"        # Avoid stale rate-limit headers
     ]
     
