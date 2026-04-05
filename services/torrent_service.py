@@ -14,6 +14,31 @@ class TorrentService:
             '.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus', '.wma' # Audio
         }
 
+    def extract_tracker_url(self, torrent_path: Path) -> Optional[str]:
+        """Tries to extract a tracker URL (like rutracker) from .torrent metadata."""
+        try:
+            with open(torrent_path, 'rb') as f:
+                data = f.read()
+            
+            # 1. Search for typical tracker URL pattern (e.g. rutracker)
+            match = re.search(rb'https?://[^\s<>"]+viewtopic\.php\?t=\d+', data)
+            if match:
+                return match.group(0).decode('utf-8', errors='ignore')
+                
+            # 2. Fallback: Search for bencoded 'comment' field
+            match = re.search(rb'7:comment(\d+):', data)
+            if match:
+                try:
+                    length = int(match.group(1))
+                    start = match.end()
+                    comment = data[start:start+length].decode('utf-8', errors='ignore')
+                    if comment.startswith('http'):
+                        return comment
+                except: pass
+            return None
+        except Exception:
+            return None
+
     async def get_torrent_info(self, torrent_path: Path) -> Dict:
         """Returns information about the torrent: files, total_size, name."""
         cmd = ["aria2c", "--show-files", str(torrent_path)]

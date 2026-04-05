@@ -581,8 +581,10 @@ async def process_torrent_download(message: types.Message, file_id: str, bot: Bo
             # Individual file upload...
                 
         await status_message.delete()
+        # Extract original tracker URL from .torrent metadata (comment field)
+        tracker_url = torrent_service.extract_tracker_url(torrent_path) or "Torrent"
         # Record stat once for the whole torrent
-        stats.add_download('Torrent', message.from_user.id, stored_name, 'torrent', 'torrent_file', "Torrent")
+        stats.add_download('Torrent', message.from_user.id, stored_name, 'torrent', 'torrent_file', tracker_url)
         download_logger.info(f"Torrent success: {display_name} ({handle}) downloaded {len(media_files)} files")
 
     except Exception as e:

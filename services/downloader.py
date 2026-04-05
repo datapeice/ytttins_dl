@@ -1089,7 +1089,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         if status_task:
             status_task.cancel()
 
-async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: int = None, use_proxy: bool = False, min_duration: int = 0, progress_callback: Callable = None, skip_cleanup: bool = False) -> Tuple[Path, Optional[Path], Dict]:
+async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: int = None, use_proxy: bool = False, min_duration: int = 0, progress_callback: Callable = None, skip_cleanup: bool = False, attempt: int = 1) -> Tuple[Path, Optional[Path], Dict]:
     """Универсальный метод для YouTube/Instagram/музыки через yt-dlp с retry на 403"""
     unique_id = uuid.uuid4().hex[:8]
     output_template = str(DOWNLOADS_DIR / f"%(title).50s_%(id)s_{unique_id}.%(ext)s")
@@ -1098,9 +1098,6 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
     is_reddit = "reddit.com" in url or "redd.it" in url
     is_youtube = "youtube.com" in url or "youtu.be" in url
     is_instagram = "instagram.com" in url
-    
-    # Single attempt with optimal settings
-    attempt = 1
     user_agent = USER_AGENTS[0]
     use_impersonate = True
     
@@ -1131,6 +1128,8 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
             },
             'remote_components': ['ejs:github'],
             'fixup': 'never',
+            'concurrent_fragment_downloads': 1, # Avoid thread safety issues with curl_cffi
+            'hls_prefer_native': True,          # Use native downloader for HLS where possible
         }
 
         if min_duration > 0:
@@ -1251,6 +1250,15 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
         return file_path, final_thumbnail, metadata
                     
     except Exception as e:
+        # Retry once if we hit the curl_cffi shutdown error
+        if "cannot schedule new futures after shutdown" in str(e) and attempt == 1:
+            logging.warning("⚠️ curl_cffi shutdown error detected. Retrying download once...")
+            attempt = 2
+            # Wait a moment for things to settle
+            await asyncio.sleep(2)
+            # Recursively call with attempt 2
+            return await _download_local_ytdlp(url, is_music, video_height, use_proxy, min_duration, progress_callback, skip_cleanup, attempt=2)
+            
         logging.error(f"YT-DLP critical error: {str(e)[:200]}")
         raise e
     

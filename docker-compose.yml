@@ -31,8 +31,6 @@ services:
       - CHROME_BIN=/usr/bin/google-chrome-stable
       # Disable Chrome sandbox for Docker (required)
       - CHROME_FLAGS=--no-sandbox --disable-dev-shm-usage --disable-gpu
-      # Enable curl-cffi for TLS fingerprinting
-      - CURL_IMPERSONATE=chrome110
       # Disable PhantomJS (broken with OpenSSL 3.x) - use Node.js instead
       - YTDLP_NO_PHANTOM=1
     ports:
