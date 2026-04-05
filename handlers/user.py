@@ -481,15 +481,18 @@ async def handle_torrent(message: types.Message, bot: Bot):
         
         # 2. Get file info and check for 2GB limit
         await update_status("Analyzing torrent content...")
-        files_info = await torrent_service.get_torrent_info(torrent_path)
+        torrent_info = await torrent_service.get_torrent_info(torrent_path)
         
-        if not files_info:
-            raise Exception("Could not retrieve information from the torrent file. It might be corrupted or empty.")
-            
+        files_info = torrent_info.get('files', [])
+        total_size = torrent_info.get('total_size', 0)
+        
         MAX_SIZE = 2 * 1024 * 1024 * 1024 # 2GB
-        for f in files_info:
-            if f['size'] > MAX_SIZE:
-                raise Exception(f"File '{f['path']}' is too large ({f['size_str']}). Telegram limit is 2GB.")
+        
+        if files_info:
+            # Check individual files known before download
+            for f in files_info:
+                if f['size'] > MAX_SIZE:
+                    raise Exception(f"File '{f['path']}' is too large ({f['size_str']}). Telegram limit is 2GB.")
                 
         # 3. Start download via aria2c
         await update_status("Starting torrent download (this might take a while)...")
@@ -507,6 +510,13 @@ async def handle_torrent(message: types.Message, bot: Bot):
         
         for i, file_path in enumerate(media_files):
             if not file_path.exists(): continue
+            
+            # Per-file size check before upload (Telegram bot limit is 2GB)
+            file_size = file_path.stat().st_size
+            if file_size > MAX_SIZE:
+                size_str = f"{file_size / (1024**3):.1f}GB"
+                await message.answer(f"⚠️ Skipping <b>{file_path.name}</b>: File is too large ({size_str}). Telegram limit is 2GB.", parse_mode='HTML')
+                continue
                 
             ext = file_path.suffix.lower()
             file_num = f"({i+1}/{len(media_files)}) " if len(media_files) > 1 else ""

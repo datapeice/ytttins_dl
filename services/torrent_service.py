@@ -14,8 +14,8 @@ class TorrentService:
             '.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus', '.wma' # Audio
         }
 
-    async def get_torrent_info(self, torrent_path: Path) -> List[Dict]:
-        """Returns a list of files in the torrent and their sizes using aria2c."""
+    async def get_torrent_info(self, torrent_path: Path) -> Dict:
+        """Returns information about the torrent: files, total_size, name."""
         cmd = ["aria2c", "--show-files", str(torrent_path)]
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -23,29 +23,44 @@ class TorrentService:
             stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await process.communicate()
+        output = stdout.decode()
+        
         if process.returncode != 0:
             err = stderr.decode()
-            # Try to catch common errors
             if "not found" in err.lower():
                 raise Exception("aria2c is not installed on the system.")
             raise Exception(f"Failed to get torrent info: {err}")
         
-        output = stdout.decode()
         files = []
+        total_size = 0
+        name = ""
         
-        # aria2c --show-files output parsing
-        # It usually looks like this:
-        # idx|path/to/file|size
-        # 1|./Some Folder/file.mp4|1.2GiB
         lines = output.splitlines()
-        
-        # Find the header line or start of data
         data_started = False
+        
         for line in lines:
             line = line.strip()
             if not line: continue
             
-            # Skip noise until we see something like "idx|path|size" or "1|..."
+            # Parse Name
+            if line.lower().startswith("name:"):
+                name = line.split(":", 1)[1].strip()
+                continue
+                
+            # Parse Total Length
+            if line.lower().startswith("total length:"):
+                # Format: Total Length: 279MiB (292,804,887)
+                size_match = re.search(r"\((\d+)\)", line)
+                if size_match:
+                    total_size = int(size_match.group(1))
+                else:
+                    # Try to parse the first part if parenthesis not found
+                    parts = line.split(":", 1)[1].strip().split()
+                    if parts:
+                        total_size = self._parse_size(parts[0])
+                continue
+
+            # Parse files list (idx|path|size format)
             if "idx" in line.lower() and "|" in line:
                 data_started = True
                 continue
@@ -67,13 +82,13 @@ class TorrentService:
                         'size': size_bytes,
                         'size_str': size_str
                     })
-                    data_started = True # Ensure we continue after first match
+                    data_started = True
         
-        if not files:
-            # Fallback for different aria2 versions/formats
-            logging.warning(f"Could not parse aria2c --show-files output reliably. Output: {output[:500]}")
-            
-        return files
+        return {
+            'files': files,
+            'total_size': total_size,
+            'name': name
+        }
 
     def _parse_size(self, size_str: str) -> int:
         """Converts human readable size (e.g. 1.2GiB, 500MiB) to bytes."""
