@@ -455,7 +455,7 @@ async def handle_search(message: types.Message):
             await message.answer(user_error, parse_mode='Markdown', **reply_kwargs)
 
 
-@router.message(F.document.file_name.cast(str).lower().endswith('.torrent'))
+@router.message(lambda m: m.document and m.document.file_name and m.document.file_name.lower().endswith('.torrent'))
 async def handle_torrent(message: types.Message, bot: Bot):
     """Handles .torrent files sent by the user."""
     display_name, stored_name, handle = resolve_user_identity(message.from_user)

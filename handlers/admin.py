@@ -610,7 +610,7 @@ async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext
     await callback.answer()
 
 # ... (остальной код handle_document и handle_whitelist_add без изменений)
-@router.message(F.document)
+@router.message(F.document.file_name == "cookies.txt")
 async def handle_document(message: types.Message):
     if message.from_user.username != ADMIN_USER_ID:
         return
