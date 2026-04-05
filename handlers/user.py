@@ -457,14 +457,40 @@ async def handle_search(message: types.Message):
 
 @router.message(lambda m: m.document and m.document.file_name and m.document.file_name.lower().endswith('.torrent'))
 async def handle_torrent(message: types.Message, bot: Bot):
-    """Handles .torrent files sent by the user."""
-    display_name, stored_name, handle = resolve_user_identity(message.from_user)
-    
+    """Initial entry for torrent files. Asks for confirmation in groups."""
     if stats.whitelisted_users and not stats.is_whitelisted(message.from_user.username):
-        await message.answer("⛔ Sorry, this bot is private. You are not in the whitelist.")
+        if message.chat.type == 'private':
+            await message.answer("⛔ Sorry, this bot is private. You are not in the whitelist.")
         return
 
-    status_message = await message.answer("🎬 Processing torrent file...")
+    if message.chat.type != 'private':
+        builder = InlineKeyboardBuilder()
+        builder.add(InlineKeyboardButton(text="📥 Download Media from Torrent", callback_data=f"torrent:dl:{message.document.file_id}"))
+        await message.reply(
+            "📦 <b>Torrent detected</b>\nDo you want to download media files from this torrent?",
+            reply_markup=builder.as_markup(),
+            parse_mode='HTML'
+        )
+        return
+
+    # In private chat, start automatically
+    await process_torrent_download(message, message.document.file_id, bot)
+
+@router.callback_query(F.data.startswith("torrent:dl:"))
+async def handle_torrent_confirm(callback: types.CallbackQuery, bot: Bot):
+    """Processes confirmation from group chat."""
+    file_id = callback.data.split(":")[2]
+    await callback.answer("Starting download...")
+    # Edit original message to show progress
+    status_msg = await callback.message.edit_text("🎬 Initializing torrent download...")
+    await process_torrent_download(callback.message, file_id, bot, status_message=status_msg)
+
+async def process_torrent_download(message: types.Message, file_id: str, bot: Bot, status_message: types.Message = None):
+    """Core logic to download and upload torrent content."""
+    display_name, stored_name, handle = resolve_user_identity(message.from_user)
+    
+    if not status_message:
+        status_message = await message.answer("🎬 Processing torrent file...")
     
     async def update_status(text: str):
         try:
@@ -477,7 +503,7 @@ async def handle_torrent(message: types.Message, bot: Bot):
     
     try:
         # 1. Download .torrent file to temporary location
-        await bot.download(message.document.file_id, destination=str(torrent_path))
+        await bot.download(file_id, destination=str(torrent_path))
         
         # 2. Get file info and check for 2GB limit
         await update_status("Analyzing torrent content...")
@@ -549,12 +575,14 @@ async def handle_torrent(message: types.Message, bot: Bot):
                     )
             except Exception as e:
                 logging.error(f"Failed to upload torrent file {file_path.name}: {e}")
-                await message.answer(f"❌ Failed to upload {file_path.name[:50]}: {str(e)[:50]}...")
+                prompt_msg = f"❌ Failed to upload {file_path.name[:50]}: {str(e)[:50]}..."
+                await message.answer(prompt_msg)
             
-            # Record stat
-            stats.add_download('Torrent', message.from_user.id, stored_name, 'torrent', 'torrent_file', file_path.name)
-            
+            # Individual file upload...
+                
         await status_message.delete()
+        # Record stat once for the whole torrent
+        stats.add_download('Torrent', message.from_user.id, stored_name, 'torrent', 'torrent_file', "Torrent")
         download_logger.info(f"Torrent success: {display_name} ({handle}) downloaded {len(media_files)} files")
 
     except Exception as e:

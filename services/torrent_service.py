@@ -149,31 +149,37 @@ class TorrentService:
             
             line_str = line.decode().strip()
             
-            # Extract progress (%), Seeds (S), and Peers (P)
-            # Example: [#123456 12MiB/45MiB(26%) CN:5 DL:1.2MiB UL:0B (S:2 P:8)]
+            # Seed/Peer/Connection regexes
             percent_match = re.search(r"\((\d+)%\)", line_str) or re.search(r"(\d+)%", line_str)
-            sp_match = re.search(r"\(S:(\d+) P:(\d+)\)", line_str)
+            sp_match = re.search(r"[(\[]S:(\d+)[, ]+P:(\d+)[\)\]]", line_str)
+            if not sp_match:
+                # Try a broader match for Seeds/Peers
+                sp_match = re.search(r"S:(\d+).*P:(\d+)", line_str)
+            
+            cn_match = re.search(r"CN:(\d+)", line_str)
             dl_match = re.search(r"DL:([\d.]+)([a-zA-Z]+)", line_str)
             
             status_text = ""
+            status_parts = []
+            
+            if percent_match:
+                status_parts.append(f"Downloading: {percent_match.group(1)}%")
+            
             if sp_match:
                 seeds = int(sp_match.group(1))
                 peers = int(sp_match.group(2))
                 if seeds > 0 or peers > 0:
                     has_seeds_ever = True
-                
-                status_parts = []
-                if percent_match:
-                    status_parts.append(f"Downloading: {percent_match.group(1)}%")
-                
                 status_parts.append(f"Seeds: {seeds} | Peers: {peers}")
-                
-                if dl_match:
-                    status_parts.append(f"Speed: {dl_match.group(1)}{dl_match.group(2)}")
-                
+            elif cn_match:
+                # If S/P not found, at least show connections
+                status_parts.append(f"Connections: {cn_match.group(1)}")
+            
+            if dl_match:
+                status_parts.append(f"Speed: {dl_match.group(1)}{dl_match.group(2)}")
+            
+            if status_parts:
                 status_text = "\n".join(status_parts)
-            elif percent_match:
-                status_text = f"Downloading: {percent_match.group(1)}%"
                 
             if status_text and status_text != last_status_text:
                 if progress_callback:
