@@ -42,6 +42,7 @@ async def on_startup(bot: Bot):
         convert_netscape_to_json(cookies_txt, cookies_json)
 
     asyncio.create_task(delete_old_files())
+    asyncio.create_task(zip_cleanup_worker())
     is_local_api = "telegram-bot-api" in os.getenv("TELEGRAM_API_URL", "")
 
     if is_local_api and WEBHOOK_INTERNAL_HOST:
@@ -159,8 +160,6 @@ def main():
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
     
-    # Start background cleanup task
-    asyncio.get_event_loop().create_task(zip_cleanup_worker())
 
     logging.info(f"🚀 Bot starting webhook server on {WEBAPP_HOST}:{WEBAPP_PORT}...")
     web.run_app(app, host=WEBAPP_HOST, port=WEBAPP_PORT)

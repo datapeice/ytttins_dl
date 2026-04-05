@@ -12,6 +12,7 @@ from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from services.downloader import download_media, get_platform, is_youtube_music, is_playlist, FUNNY_STATUSES
+from services.torrent_service import torrent_service
 from services import zip_service
 from database.storage import stats
 from services.logger import download_logger
@@ -453,6 +454,117 @@ async def handle_search(message: types.Message):
         else:
             await message.answer(user_error, parse_mode='Markdown', **reply_kwargs)
 
+
+@router.message(F.document.file_name.cast(str).lower().endswith('.torrent'))
+async def handle_torrent(message: types.Message, bot: Bot):
+    """Handles .torrent files sent by the user."""
+    display_name, stored_name, handle = resolve_user_identity(message.from_user)
+    
+    if stats.whitelisted_users and not stats.is_whitelisted(message.from_user.username):
+        await message.answer("⛔ Sorry, this bot is private. You are not in the whitelist.")
+        return
+
+    status_message = await message.answer("🎬 Processing torrent file...")
+    
+    async def update_status(text: str):
+        try:
+            await safe_edit_text(status_message, f"🎬 {text}")
+        except Exception:
+            pass
+
+    torrent_path = DOWNLOADS_DIR / f"temp_{uuid.uuid4().hex[:8]}.torrent"
+    download_dir = None
+    
+    try:
+        # 1. Download .torrent file to temporary location
+        await bot.download(message.document.file_id, destination=str(torrent_path))
+        
+        # 2. Get file info and check for 2GB limit
+        await update_status("Analyzing torrent content...")
+        files_info = await torrent_service.get_torrent_info(torrent_path)
+        
+        if not files_info:
+            raise Exception("Could not retrieve information from the torrent file. It might be corrupted or empty.")
+            
+        MAX_SIZE = 2 * 1024 * 1024 * 1024 # 2GB
+        for f in files_info:
+            if f['size'] > MAX_SIZE:
+                raise Exception(f"File '{f['path']}' is too large ({f['size_str']}). Telegram limit is 2GB.")
+                
+        # 3. Start download via aria2c
+        await update_status("Starting torrent download (this might take a while)...")
+        media_files, download_dir = await torrent_service.download_torrent(torrent_path, progress_callback=update_status)
+        
+        if not media_files:
+            # Check if there were ANY files or just none match media extensions
+            all_files_count = len(list(download_dir.rglob("*")))
+            if all_files_count > 0:
+                raise Exception("No media files (video/audio) found in the torrent, only other file types.")
+            raise Exception("Download completed but no files were found. Check the torrent health.")
+            
+        # 4. Upload to Telegram
+        await update_status(f"Found {len(media_files)} media files. Uploading to Telegram...")
+        
+        for i, file_path in enumerate(media_files):
+            if not file_path.exists(): continue
+                
+            ext = file_path.suffix.lower()
+            file_num = f"({i+1}/{len(media_files)}) " if len(media_files) > 1 else ""
+            caption = f"📦 {file_num}<b>{file_path.name}</b>\n\nDownloaded via Torrent | Developed by @datapeice"
+            
+            try:
+                # Video extensions
+                if ext in {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.ts'}:
+                    duration = await probe_media_duration_seconds(file_path)
+                    await message.answer_video(
+                        types.FSInputFile(file_path),
+                        caption=caption,
+                        duration=duration,
+                        supports_streaming=True,
+                        parse_mode='HTML'
+                    )
+                # Audio extensions
+                elif ext in {'.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus'}:
+                    await message.answer_audio(
+                        types.FSInputFile(file_path),
+                        caption=caption,
+                        parse_mode='HTML'
+                    )
+                # Fallback for other media as documents
+                else:
+                    await message.answer_document(
+                        types.FSInputFile(file_path),
+                        caption=caption,
+                        parse_mode='HTML'
+                    )
+            except Exception as e:
+                logging.error(f"Failed to upload torrent file {file_path.name}: {e}")
+                await message.answer(f"❌ Failed to upload {file_path.name[:50]}: {str(e)[:50]}...")
+            
+            # Record stat
+            stats.add_download('Torrent', message.from_user.id, stored_name, 'torrent', 'torrent_file', file_path.name)
+            
+        await status_message.delete()
+        download_logger.info(f"Torrent success: {display_name} ({handle}) downloaded {len(media_files)} files")
+
+    except Exception as e:
+        error_msg = str(e)
+        logging.error(f"Torrent handling error: {error_msg}")
+        await safe_edit_text(status_message, f"❌ Torrent error: {error_msg}")
+        
+    finally:
+        # Cleanup torrent file
+        if torrent_path.exists():
+            try: torrent_path.unlink()
+            except: pass
+        
+        # Cleanup torrent directory and all its content
+        if download_dir and download_dir.exists():
+            try:
+                import shutil
+                shutil.rmtree(download_dir)
+            except Exception as e:
+                logging.error(f"Failed to cleanup torrent dir {download_dir}: {e}")
 
 @router.message(lambda m: m.text and not m.text.startswith(('/start', '/panel', '/whitelist', '/unwhitelist', 'add @', '/song')) and not m.text.lower().startswith('найти ') and not m.text.lower().startswith('search '))
 async def handle_url(message: types.Message):
