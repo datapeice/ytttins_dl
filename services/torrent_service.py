@@ -116,7 +116,8 @@ class TorrentService:
             "aria2c",
             "--dir", str(output_dir),
             "--seed-time=0",
-            "--summary-interval=3",
+            "--summary-interval=6",
+            "--bt-stop-timeout=60", # Stop if no progress for 60s
             "--file-allocation=none",
             str(torrent_path)
         ]
@@ -129,26 +130,70 @@ class TorrentService:
             stderr=asyncio.subprocess.PIPE
         )
         
+        last_progress_time = asyncio.get_event_loop().time()
+        start_time = last_progress_time
+        has_seeds_ever = False
+        last_status_text = ""
+        
         while True:
-            line = await process.stdout.readline()
+            try:
+                line = await asyncio.wait_for(process.stdout.readline(), timeout=1.0)
+            except asyncio.TimeoutError:
+                if asyncio.get_event_loop().time() - start_time > 45 and not has_seeds_ever:
+                    process.terminate()
+                    raise Exception("No seeds/peers found. This torrent appears to be dead (cannot download).")
+                continue
+                
             if not line:
                 break
             
             line_str = line.decode().strip()
-            if "(% " in line_str or "%" in line_str:
-                match = re.search(r"\((\d+)%\)", line_str)
-                if not match:
-                    match = re.search(r"(\d+)%", line_str)
-                    
-                if match and progress_callback:
-                    percent = match.group(1)
-                    await progress_callback(f"Downloading torrent: {percent}%")
+            
+            # Extract progress (%), Seeds (S), and Peers (P)
+            # Example: [#123456 12MiB/45MiB(26%) CN:5 DL:1.2MiB UL:0B (S:2 P:8)]
+            percent_match = re.search(r"\((\d+)%\)", line_str) or re.search(r"(\d+)%", line_str)
+            sp_match = re.search(r"\(S:(\d+) P:(\d+)\)", line_str)
+            dl_match = re.search(r"DL:([\d.]+)([a-zA-Z]+)", line_str)
+            
+            status_text = ""
+            if sp_match:
+                seeds = int(sp_match.group(1))
+                peers = int(sp_match.group(2))
+                if seeds > 0 or peers > 0:
+                    has_seeds_ever = True
+                
+                status_parts = []
+                if percent_match:
+                    status_parts.append(f"Downloading: {percent_match.group(1)}%")
+                
+                status_parts.append(f"Seeds: {seeds} | Peers: {peers}")
+                
+                if dl_match:
+                    status_parts.append(f"Speed: {dl_match.group(1)}{dl_match.group(2)}")
+                
+                status_text = "\n".join(status_parts)
+            elif percent_match:
+                status_text = f"Downloading: {percent_match.group(1)}%"
+                
+            if status_text and status_text != last_status_text:
+                if progress_callback:
+                    await progress_callback(status_text)
+                last_status_text = status_text
+                
+            # Periodic check for dead torrents if stuck at start
+            if asyncio.get_event_loop().time() - start_time > 45 and not has_seeds_ever:
+                process.terminate()
+                raise Exception("No seeds/peers found. This torrent appears to be dead (cannot download).")
         
         await process.wait()
         
         if process.returncode != 0:
+            # Check if it was terminated by us or failed
             stderr_data = await process.stderr.read()
             err_msg = stderr_data.decode()
+            if "Terminated" in err_msg or process.returncode == -15: # SIGTERM
+                raise Exception("No seeds/peers found. This torrent appears to be dead (cannot download).")
+            
             logging.error(f"Torrent download failed: {err_msg}")
             raise Exception(f"Download failed: {err_msg[:200]}")
             
