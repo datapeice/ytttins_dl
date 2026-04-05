@@ -1,4 +1,5 @@
 import uuid
+from typing import Union
 import re
 import logging
 import asyncio
@@ -474,7 +475,7 @@ async def handle_torrent(message: types.Message, bot: Bot):
         return
 
     # In private chat, start automatically
-    await process_torrent_download(message, message.document.file_id, bot)
+    await process_torrent_download(message, message.document.file_id, bot, is_file_id=True)
 
 @router.callback_query(F.data.startswith("torrent:dl:"))
 async def handle_torrent_confirm(callback: types.CallbackQuery, bot: Bot):
@@ -483,14 +484,17 @@ async def handle_torrent_confirm(callback: types.CallbackQuery, bot: Bot):
     await callback.answer("Starting download...")
     # Edit original message to show progress
     status_msg = await callback.message.edit_text("🎬 Initializing torrent download...")
-    await process_torrent_download(callback.message, file_id, bot, status_message=status_msg)
+    await process_torrent_download(callback.message, file_id, bot, status_message=status_msg, is_file_id=True)
 
-async def process_torrent_download(message: types.Message, file_id: str, bot: Bot, status_message: types.Message = None):
+async def process_torrent_download(event: Union[types.Message, types.ChosenInlineResult], source: str, bot: Bot, status_message: types.Message = None, is_file_id: bool = False):
     """Core logic to download and upload torrent content."""
-    display_name, stored_name, handle = resolve_user_identity(message.from_user)
+    display_name, stored_name, handle = resolve_user_identity(event.from_user)
+    user_id = event.from_user.id
+    # If it's a message, we send back to that chat (can be group). If inline, specifically to user.
+    dest_chat_id = event.chat.id if isinstance(event, types.Message) else user_id
     
     if not status_message:
-        status_message = await message.answer("🎬 Processing torrent file...")
+        status_message = await bot.send_message(dest_chat_id, "🎬 Processing torrent...")
     
     async def update_status(text: str):
         try:
@@ -498,16 +502,21 @@ async def process_torrent_download(message: types.Message, file_id: str, bot: Bo
         except Exception:
             pass
 
-    torrent_path = DOWNLOADS_DIR / f"temp_{uuid.uuid4().hex[:8]}.torrent"
+    torrent_path = None
     download_dir = None
     
     try:
-        # 1. Download .torrent file to temporary location
-        await bot.download(file_id, destination=str(torrent_path))
+        if is_file_id:
+            # 1. Download .torrent file to temporary location
+            torrent_path = DOWNLOADS_DIR / f"temp_{uuid.uuid4().hex[:8]}.torrent"
+            await bot.download(source, destination=str(torrent_path))
+            torrent_source = torrent_path
+        else:
+            torrent_source = source
         
         # 2. Get file info and check for 2GB limit
         await update_status("Analyzing torrent content...")
-        torrent_info = await torrent_service.get_torrent_info(torrent_path)
+        torrent_info = await torrent_service.get_torrent_info(torrent_source)
         
         files_info = torrent_info.get('files', [])
         total_size = torrent_info.get('total_size', 0)
@@ -522,7 +531,7 @@ async def process_torrent_download(message: types.Message, file_id: str, bot: Bo
                 
         # 3. Start download via aria2c
         await update_status("Starting torrent download (this might take a while)...")
-        media_files, download_dir = await torrent_service.download_torrent(torrent_path, progress_callback=update_status)
+        media_files, download_dir = await torrent_service.download_torrent(torrent_source, progress_callback=update_status)
         
         if not media_files:
             # Check if there were ANY files or just none match media extensions
@@ -541,7 +550,7 @@ async def process_torrent_download(message: types.Message, file_id: str, bot: Bo
             file_size = file_path.stat().st_size
             if file_size > MAX_SIZE:
                 size_str = f"{file_size / (1024**3):.1f}GB"
-                await message.answer(f"⚠️ Skipping <b>{file_path.name}</b>: File is too large ({size_str}). Telegram limit is 2GB.", parse_mode='HTML')
+                await bot.send_message(dest_chat_id, f"⚠️ Skipping <b>{file_path.name}</b>: File is too large ({size_str}). Telegram limit is 2GB.", parse_mode='HTML')
                 continue
                 
             ext = file_path.suffix.lower()
@@ -552,7 +561,8 @@ async def process_torrent_download(message: types.Message, file_id: str, bot: Bo
                 # Video extensions
                 if ext in {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.ts'}:
                     duration = await probe_media_duration_seconds(file_path)
-                    await message.answer_video(
+                    await bot.send_video(
+                        dest_chat_id,
                         types.FSInputFile(file_path),
                         caption=caption,
                         duration=duration,
@@ -561,14 +571,16 @@ async def process_torrent_download(message: types.Message, file_id: str, bot: Bo
                     )
                 # Audio extensions
                 elif ext in {'.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus'}:
-                    await message.answer_audio(
+                    await bot.send_audio(
+                        dest_chat_id,
                         types.FSInputFile(file_path),
                         caption=caption,
                         parse_mode='HTML'
                     )
                 # Fallback for other media as documents
                 else:
-                    await message.answer_document(
+                    await bot.send_document(
+                        dest_chat_id,
                         types.FSInputFile(file_path),
                         caption=caption,
                         parse_mode='HTML'
@@ -576,15 +588,19 @@ async def process_torrent_download(message: types.Message, file_id: str, bot: Bo
             except Exception as e:
                 logging.error(f"Failed to upload torrent file {file_path.name}: {e}")
                 prompt_msg = f"❌ Failed to upload {file_path.name[:50]}: {str(e)[:50]}..."
-                await message.answer(prompt_msg)
+                await bot.send_message(dest_chat_id, prompt_msg)
             
             # Individual file upload...
                 
         await status_message.delete()
-        # Extract original tracker URL from .torrent metadata (comment field)
-        tracker_url = torrent_service.extract_tracker_url(torrent_path) or "Torrent"
+        # Extract original tracker URL if possible
+        tracker_url = "Torrent"
+        if torrent_path:
+            tracker_url = torrent_service.extract_tracker_url(torrent_path) or "Torrent"
+        elif isinstance(torrent_source, str) and torrent_source.startswith("http"):
+            tracker_url = torrent_source
         # Record stat once for the whole torrent
-        stats.add_download('Torrent', message.from_user.id, stored_name, 'torrent', 'torrent_file', tracker_url)
+        stats.add_download('Torrent', user_id, stored_name, 'torrent', 'torrent_file', tracker_url)
         download_logger.info(f"Torrent success: {display_name} ({handle}) downloaded {len(media_files)} files")
 
     except Exception as e:
@@ -593,8 +609,8 @@ async def process_torrent_download(message: types.Message, file_id: str, bot: Bo
         await safe_edit_text(status_message, f"❌ Torrent error: {error_msg}")
         
     finally:
-        # Cleanup torrent file
-        if torrent_path.exists():
+        # Cleanup torrent file if it was downloaded from TG
+        if torrent_path and torrent_path.exists():
             try: torrent_path.unlink()
             except: pass
         
@@ -607,9 +623,9 @@ async def process_torrent_download(message: types.Message, file_id: str, bot: Bo
                 logging.error(f"Failed to cleanup torrent dir {download_dir}: {e}")
 
 @router.message(lambda m: m.text and not m.text.startswith(('/start', '/panel', '/whitelist', '/unwhitelist', 'add @', '/song')) and not m.text.lower().startswith('найти ') and not m.text.lower().startswith('search '))
-async def handle_url(message: types.Message):
-    # Accept any URL-like string
-    url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
+async def handle_url(message: types.Message, bot: Bot):
+    # Accept any URL-like string or magnet link
+    url_pattern = r'(?:https?://|www\.|magnet:\?xt=urn:btih:)[^\s<>"]+'
     
     match = re.search(url_pattern, message.text)
     if not match:
@@ -643,6 +659,10 @@ async def handle_url(message: types.Message):
 
     try:
         platform = get_platform(target_url)
+        if platform == "torrent":
+            await process_torrent_download(message, target_url, bot, is_file_id=False)
+            return
+
         if platform == "unknown":
             if not is_group:
                 await message.answer("Sorry, this platform is not supported.", **reply_kwargs)
@@ -1146,7 +1166,7 @@ async def inline_query_handler(inline_query: types.InlineQuery):
     text = inline_query.query.strip()
     
     # URL pattern
-    url_pattern = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
+    url_pattern = r'(?:https?://|www\.|magnet:\?xt=urn:btih:)[^\s<>"]+'
     
     # 1. If empty or not a URL, show "Paste a link"
     match = re.search(url_pattern, text)
@@ -1339,6 +1359,12 @@ async def handle_inline_result_chosen(chosen_result: types.ChosenInlineResult, b
 
         platform = get_platform(target_url)
         is_music = is_youtube_music(target_url)
+
+        # Torrent / Magnet handling
+        if platform == "torrent":
+            await update_status("🎬 Torrent detected. Processing... Results will be sent to your PM.")
+            await process_torrent_download(chosen_result, target_url, bot, is_file_id=False)
+            return
 
         # YouTube non-shorts non-music: show format selection buttons
         if platform == "youtube" and not is_music and "/shorts/" not in target_url.lower():

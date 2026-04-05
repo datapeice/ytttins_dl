@@ -219,11 +219,16 @@ def get_platform(url: str) -> str:
     elif "://t.me" in url_lower or "://telegram.me" in url_lower:
         return "unknown"
     elif "https://" in url_lower or "http://" in url_lower:
+        # Check if it's a torrent file
+        if url_lower.split("?")[0].endswith(".torrent") or "/magnet/" in url_lower:
+             return "torrent"
         # Check if it's a direct media file first
-        if any(url_lower.endswith(ext) for ext in ('.mp4', '.mov', '.webm', '.m4v', '.m3u8', '.ts')):
+        if any(url_lower.split("?")[0].endswith(ext) for ext in ('.mp4', '.mov', '.webm', '.m4v', '.m3u8', '.ts')):
              return "video"
         # yt-dlp supports 1800+ sites, try generic video classification
         return "video"
+    elif url_lower.startswith("magnet:"):
+        return "torrent"
     else:
         return "unknown"
 

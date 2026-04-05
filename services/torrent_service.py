@@ -2,7 +2,7 @@ import asyncio
 import subprocess
 import logging
 from pathlib import Path
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Union
 import uuid
 import re
 
@@ -39,9 +39,18 @@ class TorrentService:
         except Exception:
             return None
 
-    async def get_torrent_info(self, torrent_path: Path) -> Dict:
+    async def get_torrent_info(self, torrent_source: Union[Path, str]) -> Dict:
         """Returns information about the torrent: files, total_size, name."""
-        cmd = ["aria2c", "--show-files", str(torrent_path)]
+        is_magnet = isinstance(torrent_source, str) and torrent_source.startswith("magnet:")
+        
+        # For magnet links, we need to wait a bit to fetch metadata
+        cmd = ["aria2c", "--show-files"]
+        if is_magnet:
+            # Add timeout to metadata fetching for magnets
+            cmd.extend(["--bt-metadata-only=true", "--bt-stop-timeout=60", "--enable-dht=true"])
+            
+        cmd.append(str(torrent_source))
+        
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -130,7 +139,7 @@ class TorrentService:
         unit = match.group(2) or "B"
         return int(number * units.get(unit, 1))
 
-    async def download_torrent(self, torrent_path: Path, progress_callback=None) -> Tuple[List[Path], Path]:
+    async def download_torrent(self, torrent_source: Union[Path, str], progress_callback=None) -> Tuple[List[Path], Path]:
         """Downloads the torrent and returns a list of media files and the output directory."""
         unique_id = uuid.uuid4().hex[:8]
         output_dir = self.downloads_dir / f"torrent_{unique_id}"
@@ -154,7 +163,7 @@ class TorrentService:
             "--bt-tracker-interval=60",
             "--user-agent=Transmission/3.00", # Some trackers block aria2c
             "--peer-id-prefix=-TR3000-",      # Impersonate Transmission
-            str(torrent_path)
+            str(torrent_source)
         ]
         
         logging.info(f"Starting torrent download: {' '.join(cmd)}")
