@@ -151,21 +151,23 @@ async def cmd_me(message: types.Message):
     display_name, stored_name, handle = resolve_user_identity(message.from_user)
     
     profile = stats.get_user_profile(user_id)
-    is_premium = bool(profile.is_premium)
+    is_premium = bool(profile.get("is_premium") if isinstance(profile, dict) else profile.is_premium)
     premium_site_limit = 10
     
     kb_builder = InlineKeyboardBuilder()
     
     if is_premium:
-        if profile.premium_expiry:
-            expiry_str = profile.premium_expiry.strftime('%Y-%m-%d %H:%M:%S UTC')
+        premium_expiry = profile.get("premium_expiry") if isinstance(profile, dict) else profile.premium_expiry
+        if premium_expiry:
+            expiry_str = premium_expiry.strftime('%Y-%m-%d %H:%M:%S UTC') if hasattr(premium_expiry, 'strftime') else str(premium_expiry)
             status = f"🌟 <b>Premium Status:</b> Active until <code>{expiry_str}</code>"
         else:
             status = f"🌟 <b>Premium Status:</b> Active (Forever)"
     else:
         status = f"🆓 <b>Premium Status:</b> Inactive"
         if stats.get_app_setting("premium_limits_enabled", "True") == "True":
-            status += f"\n📊 Premium Site Downloads Today: {profile.daily_premium_site_downloads}/{premium_site_limit}"
+            daily_downloads = profile.get("daily_premium_site_downloads", 0) if isinstance(profile, dict) else profile.daily_premium_site_downloads
+            status += f"\n📊 Premium Site Downloads Today: {daily_downloads}/{premium_site_limit}"
         
     kb_builder.add(InlineKeyboardButton(text="⭐️ Support Bot (Donate)", callback_data="show_donate_menu"))
     
@@ -714,13 +716,14 @@ async def handle_url(message: types.Message, bot: Bot):
     
     # Premium logic check
     profile = stats.get_user_profile(user_id)
-    is_premium = bool(profile.is_premium)
+    is_premium = bool(profile.get("is_premium") if isinstance(profile, dict) else profile.is_premium)
     is_prem_site = is_premium_site(target_url)
     
     if is_prem_site:
         limits_enabled = stats.get_app_setting("premium_limits_enabled", "True") == "True"
         if limits_enabled and not is_premium:
-            if profile.daily_premium_site_downloads >= 10:
+            daily_downloads = profile.get("daily_premium_site_downloads", 0) if isinstance(profile, dict) else profile.daily_premium_site_downloads
+            if daily_downloads >= 10:
                 await message.answer("❌ You have reached your daily limit of 10 downloads from premium sites.\n⭐️ Donate 50+ stars (/donate) to unlock Premium and remove limits!")
                 return
 
