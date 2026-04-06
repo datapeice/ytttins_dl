@@ -179,6 +179,14 @@ async def cmd_me(message: types.Message):
         f"<b>Name:</b> {display_name}\n"
         f"<b>ID:</b> <code>{user_id}</code>\n"
         f"<b>Total Downloads:</b> {total_downloads}\n\n"
+        f"{status}\n\n"
+        f"<b>Your Current Limits:</b>\n"
+        f"• Default Sites: {'Unlimited parallelism' if is_premium else '2 parallel'}\n"
+        f"• Premium/Torrents: 1 parallel\n"
+    )
+
+    await message.answer(text, parse_mode="HTML", reply_markup=kb_builder.as_markup())
+
 @router.message(F.text == "⭐️ Support")
 @router.message(Command("donate"))
 async def handle_donate(message: types.Message, bot: Bot):
