@@ -130,7 +130,90 @@ async def cmd_whitelist_remove(message: types.Message):
         await message.answer(f"✅ User @{username} has been removed from the whitelist.")
     else:
         await message.answer(f"⚠️ User @{username} is not in the whitelist.")
+@router.message(Command("addpremium"))
+async def cmd_addpremium(message: types.Message):
+    if message.from_user.username != ADMIN_USER_ID:
+        await message.answer("You don't have permission.")
+        return
+        
+    args = message.text.split()[1:]
+    if not args:
+        await message.answer("Usage: `/addpremium <user_id or @username> [days]`\nExample: `/addpremium 123456789 30`\nIf days are not specified, Premium is granted forever.", parse_mode="Markdown")
+        return
+        
+    target = args[0].lstrip('@')
+    days = None
+    if len(args) > 1 and args[1].isdigit():
+        days = int(args[1])
+        
+    user_id = None
+    if target.isdigit():
+        user_id = int(target)
+    else:
+        if stats.Session:
+            with stats.Session() as session:
+                history = session.query(DownloadHistory).filter(DownloadHistory.username.ilike(f"%{target}%")).first()
+                if history:
+                    user_id = history.user_id
+                    
+    if not user_id:
+        await message.answer(f"❌ User '{target}' not found in database. Try using their numeric ID.")
+        return
+        
+    try:
+        if days is not None:
+            stats.unlock_premium(user_id, days=days)
+            await message.answer(f"✅ Premium granted to user `{user_id}` for {days} days.", parse_mode="Markdown")
+        else:
+            from database.models import UserProfile
+            with stats.Session() as session:
+                profile = session.query(UserProfile).filter_by(user_id=user_id).first()
+                if not profile:
+                    profile = UserProfile(user_id=user_id)
+                    session.add(profile)
+                profile.is_premium = 1
+                profile.premium_expiry = None
+                session.commit()
+            await message.answer(f"✅ Premium granted to user `{user_id}` **forever**.", parse_mode="Markdown")
+    except Exception as e:
+        await message.answer(f"❌ Error: {str(e)}")
 
+@router.message(Command("removepremium"))
+async def cmd_removepremium(message: types.Message):
+    if message.from_user.username != ADMIN_USER_ID:
+        return
+        
+    args = message.text.split()[1:]
+    if not args:
+        await message.answer("Usage: `/removepremium <user_id or @username>`", parse_mode="Markdown")
+        return
+        
+    target = args[0].lstrip('@')
+    user_id = None
+    if target.isdigit():
+        user_id = int(target)
+    else:
+        if stats.Session:
+            with stats.Session() as session:
+                history = session.query(DownloadHistory).filter(DownloadHistory.username.ilike(f"%{target}%")).first()
+                if history:
+                    user_id = history.user_id
+                    
+    if not user_id:
+        await message.answer(f"❌ User '{target}' not found in database.")
+        return
+        
+    try:
+        from database.models import UserProfile
+        with stats.Session() as session:
+            profile = session.query(UserProfile).filter_by(user_id=user_id).first()
+            if profile:
+                profile.is_premium = 0
+                profile.premium_expiry = None
+                session.commit()
+        await message.answer(f"✅ Premium removed from user `{user_id}`.", parse_mode="Markdown")
+    except Exception as e:
+        await message.answer(f"❌ Error: {str(e)}")
 @router.message(Command("panel"))
 async def send_admin_panel(message: types.Message):
     if message.from_user.username != ADMIN_USER_ID:
@@ -167,6 +250,7 @@ async def send_admin_panel(message: types.Message):
         InlineKeyboardButton(text="➖ Remove User", callback_data="admin:remove_user")],
         [InlineKeyboardButton(text="📊 Statistics", callback_data="admin:stats"),
         InlineKeyboardButton(text="📜 History", callback_data="admin:history")],
+        [InlineKeyboardButton(text=f"🔄 Toggle Limits: {stats.get_app_setting('premium_limits_enabled', 'True')}", callback_data="admin:toggle_limits")],
         [InlineKeyboardButton(text="📨 Broadcast Message", callback_data="admin:broadcast")],
         [InlineKeyboardButton(text="🍪 Update Cookies", callback_data="admin:update_cookies"),
         InlineKeyboardButton(text="🔄 Update yt-dlp", callback_data="admin:update_ytdlp")],
@@ -286,7 +370,28 @@ async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext
 
     action = callback.data.replace("admin:", "", 1)
     
-    if action == "add_user":
+    if action == "toggle_limits":
+        new_val = stats.toggle_app_setting("premium_limits_enabled")
+        await callback.answer(f"Premium limits toggled to {new_val}")
+        
+        # update keyboard
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👥 Users List", callback_data="admin:users")],
+            [InlineKeyboardButton(text="➕ Add User", callback_data="admin:add_user"),
+            InlineKeyboardButton(text="➖ Remove User", callback_data="admin:remove_user")],
+            [InlineKeyboardButton(text="📊 Statistics", callback_data="admin:stats"),
+            InlineKeyboardButton(text="📜 History", callback_data="admin:history")],
+            [InlineKeyboardButton(text=f"🔄 Toggle Limits: {new_val}", callback_data="admin:toggle_limits")],
+            [InlineKeyboardButton(text="📨 Broadcast Message", callback_data="admin:broadcast")],
+            [InlineKeyboardButton(text="🍪 Update Cookies", callback_data="admin:update_cookies"),
+            InlineKeyboardButton(text="🔄 Update yt-dlp", callback_data="admin:update_ytdlp")],
+            [InlineKeyboardButton(text="📂 Get Logs", callback_data="admin:get_logs"),
+            InlineKeyboardButton(text="🗑 Clear Logs", callback_data="admin:clear_logs")],
+            [InlineKeyboardButton(text="❌ Close", callback_data="admin:close")]
+        ])
+        await callback.message.edit_reply_markup(reply_markup=keyboard)
+
+    elif action == "add_user":
         await callback.message.answer("Please send the username to add to whitelist in format:\n`/whitelist username`", parse_mode="Markdown")
         await callback.answer()
         

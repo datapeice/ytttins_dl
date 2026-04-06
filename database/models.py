@@ -41,3 +41,26 @@ class DownloadHistory(Base):
     url = Column(String)
     title = Column(String)
     timestamp = Column(DateTime, default=datetime.utcnow)
+
+class UserProfile(Base):
+    __tablename__ = 'user_profiles'
+    user_id = Column(BigInteger, primary_key=True)
+    is_premium = Column(Integer, default=0) # 1 for True, 0 for False
+    premium_expiry = Column(DateTime, nullable=True)
+    daily_premium_site_downloads = Column(Integer, default=0)
+    last_reset_date = Column(String)
+    notified_expiry_soon = Column(Integer, default=0)
+    notified_expired = Column(Integer, default=0)
+
+class AppSetting(Base):
+    __tablename__ = 'app_settings'
+    key = Column(String, primary_key=True)
+    value = Column(String)
+
+class DownloadQueueItem(Base):
+    __tablename__ = 'download_queue'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger)
+    url = Column(String)
+    status = Column(String, default='pending')
+    added_at = Column(DateTime, default=datetime.utcnow)

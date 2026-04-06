@@ -21,6 +21,73 @@ WEBHOOK_PATH = f"/{BOT_TOKEN}"
 WEBAPP_HOST = "0.0.0.0"
 WEBAPP_PORT = int(os.getenv("WEBAPP_PORT", 8443))
 
+async def check_premium_expiry_worker(bot: Bot):
+    """Background worker to check premium expiries."""
+    from database.storage import stats
+    from database.models import UserProfile
+    from datetime import datetime, timedelta
+    
+    while True:
+        try:
+            if stats.Session:
+                with stats.Session() as session:
+                    now = datetime.utcnow()
+                    soon = now + timedelta(days=1)
+                    
+                    # Notified Expiry Soon
+                    expiring_soon = session.query(UserProfile).filter(
+                        UserProfile.is_premium == 1,
+                        UserProfile.premium_expiry.isnot(None),
+                        UserProfile.premium_expiry <= soon,
+                        UserProfile.premium_expiry > now,
+                        UserProfile.notified_expiry_soon == 0
+                    ).all()
+                    
+                    for profile in expiring_soon:
+                        profile.notified_expiry_soon = 1
+                        # Убеждаемся, что ID положительный (это личный чат, а не группа, у групп ID отрицательные)
+                        if profile.user_id > 0:
+                            try:
+                                await bot.send_message(
+                                    profile.user_id,
+                                    "⚠️ <b>Warning!</b>\nYour Premium subscription will expire in less than 24 hours.\nUse /donate to extend it and keep enjoying the features without limits!",
+                                    parse_mode="HTML"
+                                )
+                            except Exception as e:
+                                logging.warning(f"Failed to notify user {profile.user_id} (perhaps hasn't started bot in PM): {e}")
+                    
+                    session.commit()
+                            
+                    # Notified Expired
+                    expired = session.query(UserProfile).filter(
+                        UserProfile.is_premium == 1,
+                        UserProfile.premium_expiry.isnot(None),
+                        UserProfile.premium_expiry <= now,
+                        UserProfile.notified_expired == 0
+                    ).all()
+                    
+                    for profile in expired:
+                        profile.is_premium = 0
+                        profile.premium_expiry = None
+                        profile.notified_expiry_soon = 0
+                        profile.notified_expired = 0
+                        
+                        if profile.user_id > 0:
+                            try:
+                                await bot.send_message(
+                                    profile.user_id,
+                                    "❌ <b>Premium Expired!</b>\nYour Premium subscription has ended. You have been switched back to the regular limits.\nUse /donate to reactivate Premium!",
+                                    parse_mode="HTML"
+                                )
+                            except Exception as e:
+                                logging.warning(f"Failed to notify user {profile.user_id} about expired premium: {e}")
+                    
+                    session.commit()
+        except Exception as e:
+            logging.error(f"Expiry check error: {e}")
+            
+        await asyncio.sleep(3600)  # Check every hour
+
 async def on_startup(bot: Bot):
     from services.cookie_utils import convert_netscape_to_json
     from config import DATA_DIR, COOKIES_CONTENT
@@ -43,6 +110,7 @@ async def on_startup(bot: Bot):
 
     asyncio.create_task(delete_old_files())
     asyncio.create_task(zip_cleanup_worker())
+    asyncio.create_task(check_premium_expiry_worker(bot))
     is_local_api = "telegram-bot-api" in os.getenv("TELEGRAM_API_URL", "")
 
     if is_local_api and WEBHOOK_INTERNAL_HOST:

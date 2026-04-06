@@ -8,7 +8,7 @@ from typing import Dict, Set
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker
 from config import DATABASE_URL, DATA_DIR, WHITELISTED_ENV
-from database.models import Base, WhitelistedUser, DownloadStat, ActiveUser, ActiveGroup, Cookie, DownloadHistory
+from database.models import Base, WhitelistedUser, DownloadStat, ActiveUser, ActiveGroup, Cookie, DownloadHistory, UserProfile, AppSetting
 
 class Stats:
     def __init__(self):
@@ -27,6 +27,20 @@ class Stats:
                 Base.metadata.create_all(self.db_engine)
                 self.Session = sessionmaker(bind=self.db_engine)
                 logging.info("✅ Connected to database successfully")
+                
+                # Auto-migrate new columns
+                from sqlalchemy import text
+                with self.Session() as sess:
+                    try:
+                        sess.execute(text("ALTER TABLE user_profiles ADD COLUMN notified_expiry_soon INTEGER DEFAULT 0"))
+                        sess.commit()
+                    except Exception:
+                        sess.rollback()
+                    try:
+                        sess.execute(text("ALTER TABLE user_profiles ADD COLUMN notified_expired INTEGER DEFAULT 0"))
+                        sess.commit()
+                    except Exception:
+                        sess.rollback()
             except Exception as e:
                 logging.error(f"❌ Failed to connect to database: {e}")
                 self.db_engine = None
@@ -297,5 +311,105 @@ class Stats:
             # File fallback for history is a text log, not easily removable by ID
             # In file mode, we just return False for now or recommend manually editing logs/downloads.log
             return False
+
+    # Premium and Settings Methods
+    def get_user_profile(self, user_id: int) -> dict:
+        if not self.Session:
+            return {"is_premium": False, "premium_expiry": None, "daily_premium_site_downloads": 0}
+            
+        with self.Session() as session:
+            profile = session.query(UserProfile).filter_by(user_id=user_id).first()
+            if not profile:
+                profile = UserProfile(user_id=user_id)
+                session.add(profile)
+                session.commit()
+                session.refresh(profile)
+                
+            today = datetime.now().strftime("%Y-%m-%d")
+            if profile.last_reset_date != today:
+                profile.daily_premium_site_downloads = 0
+                profile.last_reset_date = today
+                session.commit()
+                
+            is_premium = bool(profile.is_premium)
+            if is_premium and profile.premium_expiry and profile.premium_expiry < datetime.now():
+                is_premium = False
+                profile.is_premium = 0
+                session.commit()
+                
+            return {
+                "is_premium": is_premium,
+                "premium_expiry": profile.premium_expiry,
+                "daily_premium_site_downloads": profile.daily_premium_site_downloads
+            }
+
+    def unlock_premium(self, user_id: int, days: int = 30) -> bool:
+        if not self.Session:
+            return False
+            
+        with self.Session() as session:
+            profile = session.query(UserProfile).filter_by(user_id=user_id).first()
+            if not profile:
+                profile = UserProfile(user_id=user_id)
+                session.add(profile)
+                
+            profile.is_premium = 1
+            if profile.premium_expiry and profile.premium_expiry > datetime.now():
+                profile.premium_expiry = profile.premium_expiry + timedelta(days=days)
+            else:
+                profile.premium_expiry = datetime.now() + timedelta(days=days)
+                
+            session.commit()
+            return True
+
+    def increment_daily_premium(self, user_id: int) -> int:
+        if not self.Session:
+            return 0
+            
+        with self.Session() as session:
+            profile = session.query(UserProfile).filter_by(user_id=user_id).first()
+            if not profile:
+                profile = UserProfile(user_id=user_id)
+                session.add(profile)
+                
+            today = datetime.now().strftime("%Y-%m-%d")
+            if profile.last_reset_date != today:
+                profile.daily_premium_site_downloads = 0
+                profile.last_reset_date = today
+                
+            profile.daily_premium_site_downloads += 1
+            count = profile.daily_premium_site_downloads
+            session.commit()
+            return count
+
+    def get_app_setting(self, key: str, default: str = "False") -> str:
+        if not self.Session:
+            return default
+            
+        with self.Session() as session:
+            setting = session.query(AppSetting).filter_by(key=key).first()
+            if setting:
+                return setting.value
+            
+            # Create if not exists
+            new_setting = AppSetting(key=key, value=default)
+            session.add(new_setting)
+            session.commit()
+            return default
+
+    def toggle_app_setting(self, key: str) -> str:
+        if not self.Session:
+            return "False"
+            
+        with self.Session() as session:
+            setting = session.query(AppSetting).filter_by(key=key).first()
+            if not setting:
+                setting = AppSetting(key=key, value="False")
+                session.add(setting)
+                
+            new_val = "False" if setting.value == "True" else "True"
+            setting.value = new_val
+            session.commit()
+            return new_val
 
 stats = Stats()

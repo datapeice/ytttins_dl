@@ -145,6 +145,42 @@ async def cmd_start(message: types.Message, bot: Bot):
     # Also send the inline button for group adding
     await message.answer("Click below to invite me to your chat:", reply_markup=kb_builder.as_markup())
 
+@router.message(Command("me"))
+async def cmd_me(message: types.Message):
+    user_id = message.from_user.id
+    display_name, stored_name, handle = resolve_user_identity(message.from_user)
+    
+    profile = stats.get_user_profile(user_id)
+    is_premium = bool(profile.is_premium)
+    premium_site_limit = 10
+    
+    kb_builder = InlineKeyboardBuilder()
+    
+    if is_premium:
+        if profile.premium_expiry:
+            expiry_str = profile.premium_expiry.strftime('%Y-%m-%d %H:%M:%S UTC')
+            status = f"🌟 <b>Premium Status:</b> Active until <code>{expiry_str}</code>"
+        else:
+            status = f"🌟 <b>Premium Status:</b> Active (Forever)"
+    else:
+        status = f"🆓 <b>Premium Status:</b> Inactive"
+        if stats.get_app_setting("premium_limits_enabled", "True") == "True":
+            status += f"\n📊 Premium Site Downloads Today: {profile.daily_premium_site_downloads}/{premium_site_limit}"
+        
+    kb_builder.add(InlineKeyboardButton(text="⭐️ Support Bot (Donate)", callback_data="show_donate_menu"))
+    
+    text = (
+        f"👤 <b>User Profile</b>\n\n"
+        f"<b>Name:</b> {display_name}\n"
+        f"<b>ID:</b> <code>{user_id}</code>\n\n"
+        f"{status}\n\n"
+        f"<b>Your Current Limits:</b>\n"
+        f"• Default Sites: {'Unlimited parallelism' if is_premium else '2 parallel'}\n"
+        f"• Premium/Torrents: 1 parallel\n"
+    )
+    
+    await message.answer(text, parse_mode="HTML", reply_markup=kb_builder.as_markup())
+
 @router.message(F.text == "⭐️ Support")
 @router.message(Command("donate"))
 async def handle_donate(message: types.Message, bot: Bot):
@@ -170,6 +206,7 @@ async def handle_donate(message: types.Message, bot: Bot):
     text = (
         "⭐️ <b>Support bot development!</b>\n\n"
         "Your donations help pay for servers and develop new features. "
+        "Donate <b>50⭐️ or more</b> to unlock <b>Premium for 30 days!</b>\n\n"
         "We use <b>Telegram Stars</b> — this is the official and safe way to thank the developer.\n\n"
         "Choose an amount below, or type <code>/donate &lt;amount&gt;</code> for a custom amount:"
     )
@@ -193,6 +230,7 @@ async def callback_show_donate_menu(callback: types.CallbackQuery, bot: Bot):
     text = (
         "⭐️ <b>Support bot development!</b>\n\n"
         "Your donations help pay for servers and develop new features. "
+        "Donate <b>50⭐️ or more</b> to unlock <b>Premium for 30 days!</b>\n\n"
         "We use <b>Telegram Stars</b> — this is the official and safe way to thank the developer.\n\n"
         "Choose an amount below, or type <code>/donate &lt;amount&gt;</code> for a custom amount:"
     )
@@ -243,15 +281,21 @@ async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery, bot: Bot):
 
 @router.message(F.successful_payment)
 async def process_successful_payment(message: types.Message):
-    """Thanks the user for donation."""
+    """Thanks the user for donation and gives premium if 50+ stars."""
     payment = message.successful_payment
     amount = payment.total_amount
     
+    extra_text = ""
+    # Grant premium if donation is at least 50 stars
+    if amount >= 50:
+        if stats.unlock_premium(message.from_user.id, days=30):
+            extra_text = "\n\n⭐ <b>Bonus:</b> You have unlocked Premium for 30 days! Thank you!"
+            
     thanks_text = (
         "💖 <b>Thank you so much for your support!</b>\n\n"
         f"You have successfully donated <b>{amount} ⭐️</b>. "
         "This is incredibly important to us! We will continue improving the bot for you.\n\n"
-        "✨ <i>Status updated: Winner in life!</i>"
+        "✨ <i>Status updated: Winner in life!</i>" + extra_text
     )
     
     await message.answer(thanks_text, parse_mode='HTML')
@@ -490,7 +534,16 @@ async def process_torrent_download(event: Union[types.Message, types.ChosenInlin
     """Core logic to download and upload torrent content."""
     display_name, stored_name, handle = resolve_user_identity(event.from_user)
     user_id = event.from_user.id
-    # If it's a message, we send back to that chat (can be group). If inline, specifically to user.
+
+    profile = stats.get_user_profile(user_id)
+    sem = user_sems.premium_sems[user_id]
+
+    # Don't ask the user to wait via message if the semaphore is available.
+    if sem.locked():
+        if isinstance(event, types.Message):
+            await bot.send_message(event.chat.id, "⏳ Your torrent download is queued due to concurrent limits. Please wait...")
+
+    await sem.acquire()
     dest_chat_id = event.chat.id if isinstance(event, types.Message) else user_id
     
     if not status_message:
@@ -622,6 +675,26 @@ async def process_torrent_download(event: Union[types.Message, types.ChosenInlin
             except Exception as e:
                 logging.error(f"Failed to cleanup torrent dir {download_dir}: {e}")
 
+        if 'sem' in locals() and sem:
+            sem.release()
+
+from collections import defaultdict
+import asyncio
+
+class UserSemaphores:
+    def __init__(self):
+        self.standard_sems = defaultdict(lambda: asyncio.Semaphore(2))
+        self.premium_sems = defaultdict(lambda: asyncio.Semaphore(1))
+
+user_sems = UserSemaphores()
+
+STANDARD_SITES = ["tiktok", "instagram", "facebook", "youtube", "youtu.be"]
+
+def is_premium_site(url: str) -> bool:
+    if not url: return False
+    url_lower = url.lower()
+    return not any(domain in url_lower for domain in STANDARD_SITES)
+
 @router.message(lambda m: m.text and not m.text.startswith(('/start', '/panel', '/whitelist', '/unwhitelist', 'add @', '/song')) and not m.text.lower().startswith('найти ') and not m.text.lower().startswith('search '))
 async def handle_url(message: types.Message, bot: Bot):
     # Accept any URL-like string or magnet link
@@ -632,12 +705,39 @@ async def handle_url(message: types.Message, bot: Bot):
         return
         
     target_url = match.group(0)
+    user_id = message.from_user.id
     
     reply_kwargs = {}
     if message.chat.type != 'private':
         reply_kwargs['reply_to_message_id'] = message.message_id
         stats.add_active_group(message.chat.id)
     
+    # Premium logic check
+    profile = stats.get_user_profile(user_id)
+    is_premium = bool(profile.is_premium)
+    is_prem_site = is_premium_site(target_url)
+    
+    if is_prem_site:
+        limits_enabled = stats.get_app_setting("premium_limits_enabled", "True") == "True"
+        if limits_enabled and not is_premium:
+            if profile.daily_premium_site_downloads >= 10:
+                await message.answer("❌ You have reached your daily limit of 10 downloads from premium sites.\n⭐️ Donate 50+ stars (/donate) to unlock Premium and remove limits!")
+                return
+
+    # Semaphore selection
+    sem = None
+    is_torrent_magnet = target_url.startswith("magnet:") or target_url.endswith(".torrent")
+    if is_prem_site or is_torrent_magnet:
+        sem = user_sems.premium_sems[user_id]
+    elif not is_premium:
+        sem = user_sems.standard_sems[user_id]
+        
+    if sem and sem.locked():
+        await message.answer("⏳ Your download is queued due to concurrent limits. Please wait...")
+
+    if sem:
+        await sem.acquire()
+
     # Validate Pornhub URLs - must have viewkey parameter
     if "pornhub.com" in target_url.lower():
         if "viewkey=" not in target_url:
@@ -648,6 +748,7 @@ async def handle_url(message: types.Message, bot: Bot):
                 "Please copy the full URL from the video page.",
                 **reply_kwargs
             )
+            if sem: sem.release()
             return
 
     # Whitelist check
@@ -934,6 +1035,12 @@ async def handle_url(message: types.Message, bot: Bot):
             await safe_edit_text(status_message, user_error, parse_mode='Markdown' if '```' in user_error else None)
         else:
             await message.answer(user_error, parse_mode='Markdown' if '```' in user_error else None, **reply_kwargs)
+            
+    finally:
+        if sem:
+            sem.release()
+            if is_prem_site and 'error_msg' not in locals():
+                stats.increment_daily_premium(user_id)
 
 @router.callback_query(F.data.startswith("format:"))
 async def handle_format_selection(callback: types.CallbackQuery, bot: Bot):
