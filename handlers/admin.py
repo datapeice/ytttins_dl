@@ -221,6 +221,7 @@ async def send_admin_panel(message: types.Message):
         return
 
     weekly_stats = stats.get_weekly_stats()
+    total_premium_users = stats.get_total_premium_users()
     
     # Получаем версию на VPS
     try:
@@ -237,6 +238,7 @@ async def send_admin_panel(message: types.Message):
         f"   📹 Videos: {weekly_stats['video_count']}\n"
         f"   🎵 Music: {weekly_stats['audio_count']}\n\n"
         f"👥 Active Users (last 7 days): {weekly_stats['active_users_count']}\n"
+        f"🌟 Premium Users: {total_premium_users}\n"
         f"🏘 Active Groups: {weekly_stats.get('active_groups_count', 0)}\n\n"
         f"📝 Whitelisted Users:\n"
         f"{whitelisted_list}\n\n"
@@ -601,11 +603,12 @@ async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext
 
     elif action == "back":
         weekly_stats = stats.get_weekly_stats()
+        total_premium_users = stats.get_total_premium_users()
         try:
             local_version = yt_dlp.version.__version__
         except:
             local_version = "Unknown"
-        
+
         whitelisted_list = "\n".join([f"  @{user}" for user in stats.whitelisted_users]) if stats.whitelisted_users else "  No whitelisted users"
 
         stats_message = (
@@ -614,6 +617,7 @@ async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext
             f"   📹 Videos: {weekly_stats['video_count']}\n"
             f"   🎵 Music: {weekly_stats['audio_count']}\n\n"
             f"👥 Active Users (last 7 days): {weekly_stats['active_users_count']}\n"
+            f"🌟 Premium Users: {total_premium_users}\n"
             f"🏘 Active Groups: {weekly_stats.get('active_groups_count', 0)}\n\n"
             f"📝 Whitelisted Users:\n"
             f"{whitelisted_list}\n\n"

@@ -124,6 +124,7 @@ async def cmd_start(message: types.Message, bot: Bot):
         f"👋 <b>Hello, {display_name}!</b>\n\n"
         "I will help you download video, music and <b>playlists</b> from TikTok, YouTube, Instagram, Reddit and others.\n\n"
         "📎 <b>Just send me a link!</b>\n\n"
+        "Download torrent files by sending the .torrent file or magnet link.\n\n"
         "👥 <b>Group Chats:</b>\n"
         "Add me to your group to download media together with friends!\n\n"
         "🔍 <b>Inline Mode:</b>\n"
@@ -153,9 +154,10 @@ async def cmd_me(message: types.Message):
     profile = stats.get_user_profile(user_id)
     is_premium = bool(profile.get("is_premium") if isinstance(profile, dict) else profile.is_premium)
     premium_site_limit = 10
-    
+    total_downloads = stats.get_user_downloads_count(user_id)
+
     kb_builder = InlineKeyboardBuilder()
-    
+
     if is_premium:
         premium_expiry = profile.get("premium_expiry") if isinstance(profile, dict) else profile.premium_expiry
         if premium_expiry:
@@ -168,21 +170,15 @@ async def cmd_me(message: types.Message):
         if stats.get_app_setting("premium_limits_enabled", "True") == "True":
             daily_downloads = profile.get("daily_premium_site_downloads", 0) if isinstance(profile, dict) else profile.daily_premium_site_downloads
             status += f"\n📊 Premium Site Downloads Today: {daily_downloads}/{premium_site_limit}"
-        
+            status += f"\n⏱ Remaining Premium Videos Today: {max(0, premium_site_limit - daily_downloads)}"
+
     kb_builder.add(InlineKeyboardButton(text="⭐️ Support Bot (Donate)", callback_data="show_donate_menu"))
-    
+
     text = (
         f"👤 <b>User Profile</b>\n\n"
         f"<b>Name:</b> {display_name}\n"
-        f"<b>ID:</b> <code>{user_id}</code>\n\n"
-        f"{status}\n\n"
-        f"<b>Your Current Limits:</b>\n"
-        f"• Default Sites: {'Unlimited parallelism' if is_premium else '2 parallel'}\n"
-        f"• Premium/Torrents: 1 parallel\n"
-    )
-    
-    await message.answer(text, parse_mode="HTML", reply_markup=kb_builder.as_markup())
-
+        f"<b>ID:</b> <code>{user_id}</code>\n"
+        f"<b>Total Downloads:</b> {total_downloads}\n\n"
 @router.message(F.text == "⭐️ Support")
 @router.message(Command("donate"))
 async def handle_donate(message: types.Message, bot: Bot):
@@ -541,11 +537,18 @@ async def process_torrent_download(event: Union[types.Message, types.ChosenInlin
     sem = user_sems.premium_sems[user_id]
 
     # Don't ask the user to wait via message if the semaphore is available.
+    queued_msg = None
     if sem.locked():
         if isinstance(event, types.Message):
-            await bot.send_message(event.chat.id, "⏳ Your torrent download is queued due to concurrent limits. Please wait...")
+            queued_msg = await bot.send_message(event.chat.id, "⏳ Your torrent download is queued due to concurrent limits. Please wait...")
 
     await sem.acquire()
+    
+    if queued_msg:
+        try:
+            await queued_msg.delete()
+        except:
+            pass
     dest_chat_id = event.chat.id if isinstance(event, types.Message) else user_id
     
     if not status_message:
@@ -735,11 +738,18 @@ async def handle_url(message: types.Message, bot: Bot):
     elif not is_premium:
         sem = user_sems.standard_sems[user_id]
         
+    queued_msg = None
     if sem and sem.locked():
-        await message.answer("⏳ Your download is queued due to concurrent limits. Please wait...")
+        queued_msg = await message.answer("⏳ Your download is queued due to concurrent limits. Please wait...")
 
     if sem:
         await sem.acquire()
+    
+    if queued_msg:
+        try:
+            await queued_msg.delete()
+        except:
+            pass
 
     # Validate Pornhub URLs - must have viewkey parameter
     if "pornhub.com" in target_url.lower():

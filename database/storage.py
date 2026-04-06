@@ -241,6 +241,32 @@ class Stats:
                 logging.error(f"Error getting username by ID: {e}")
         return None
     
+    def get_user_downloads_count(self, user_id: int) -> int:
+        if self.Session:
+            try:
+                from database.models import DownloadHistory
+                with self.Session() as session:
+                    count = session.query(func.count(DownloadHistory.id)).filter_by(user_id=user_id).scalar()
+                    return count or 0
+            except Exception as e:
+                logging.error(f"Error getting user downloads count: {e}")
+        return 0
+
+    def get_total_premium_users(self) -> int:
+        if self.Session:
+            try:
+                from database.models import UserProfile
+                from datetime import datetime
+                with self.Session() as session:
+                    count = session.query(func.count(UserProfile.user_id)).filter(
+                        (UserProfile.is_premium == 1) &
+                        ((UserProfile.premium_expiry.is_(None)) | (UserProfile.premium_expiry > datetime.now()))
+                    ).scalar()
+                    return count or 0
+            except Exception as e:
+                logging.error(f"Error getting total premium users: {e}")
+        return 0
+
     def get_weekly_stats(self):
         today = datetime.now().date()
         week_ago = today - timedelta(days=7)

@@ -238,9 +238,17 @@ def is_youtube_music(url: str) -> bool:
 def is_playlist(url: str) -> bool:
     """Detect if the URL is a playlist or album."""
     url_lower = url.lower()
+    
     # YouTube / Music playlists
-    if ("youtube.com" in url_lower or "youtu.be" in url_lower) and ("list=" in url_lower or "playlist" in url_lower):
-        return True
+    if "youtube.com" in url_lower or "youtu.be" in url_lower:
+        # If it's a single video with a list context, treat as single video
+        if "watch?v=" in url_lower and "list=" in url_lower:
+            return False
+        if "youtu.be/" in url_lower and "list=" in url_lower:
+            return False
+        if "list=" in url_lower or "playlist" in url_lower:
+            return True
+            
     # YouTube Music albums (often playlists)
     if "music.youtube.com" in url_lower and "browse/VLPL" in url:
         return True
