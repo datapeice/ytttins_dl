@@ -1127,9 +1127,11 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
             'quiet': False,
             'verbose': True,
             'legacy_server_connect': True,
-            'socket_timeout': 30,
-            'retries': 2,
-            'fragment_retries': 2,
+            'socket_timeout': 60,
+            'retries': 5,
+            'fragment_retries': 5,
+            'low_speed_limit': 0,
+            'low_speed_time': 300,
             'playlist_items': '1' if is_youtube else '1-5',
             'max_filesize': 2048 * 1024 * 1024,
             'exec_before_download': [],
@@ -1140,7 +1142,10 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                 'node': {'path': '/usr/local/bin/node'}
             },
             'remote_components': ['ejs:github'],
-            'fixup': 'never',
+            'postprocessor_args': {
+                'ffmpeg': ['-movflags', '+faststart']
+            },
+            'fixup': 'detect_or_warn',
             'concurrent_fragment_downloads': 1, # Avoid thread safety issues with curl_cffi
             'hls_prefer_native': True,          # Use native downloader for HLS where possible
         }
@@ -1189,6 +1194,8 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
         if is_instagram:
             ydl_opts['noplaylist'] = False
             ydl_opts['extractor_args']['instagram'] = {'include_videos': True, 'include_pictures': True}
+            # Strongly prefer H.264/AVC for Instagram to avoid VP9 compatibility/resource issues
+            ydl_opts['format_sort'] = ['vcodec:h264', 'res', 'fps']
         
         ydl_opts['proxy'] = SOCKS_PROXY if use_proxy and SOCKS_PROXY else ''
         
@@ -1196,29 +1203,18 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
             ydl_opts['format'] = 'bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio/best'
             ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '320'}]
         elif is_instagram:
-            # More lenient format for Instagram to handle photo+video carousels
-            ydl_opts['format'] = 'bestvideo+bestaudio/best'
+            # Prefer AVC/H.264 entries, then fallback to anything best
+            ydl_opts['format'] = 'bestvideo[vcodec^=avc]+bestaudio/bestvideo[vcodec^=h264]+bestaudio/best[vcodec^=avc]/best[vcodec^=h264]/bestvideo+bestaudio/best'
             ydl_opts['merge_output_format'] = 'mp4'
         else:
             ydl_opts['merge_output_format'] = 'mp4'
+            # Also prefer H.264 for general videos to ensure compatibility
+            ydl_opts['format_sort'] = ['vcodec:h264', 'res', 'fps']
             if video_height:
-                ydl_opts['format'] = f"bestvideo[height<={video_height}]+bestaudio/best[height<={video_height}]/bestvideo+bestaudio/best"
+                ydl_opts['format'] = f"bestvideo[vcodec^=avc][height<={video_height}]+bestaudio/bestvideo[vcodec^=h264][height<={video_height}]+bestaudio/best[vcodec^=avc][height<={video_height}]/best[vcodec^=h264][height<={video_height}]/bestvideo[height<={video_height}]+bestaudio/best[height<={video_height}]"
             else:
-                ydl_opts['format'] = 'bestvideo[vcodec^=h264]+bestaudio/bestvideo[vcodec^=avc]+bestaudio/bestvideo+bestaudio/best[vcodec^=h264]/best[vcodec^=avc]/best'
+                ydl_opts['format'] = 'bestvideo[vcodec^=avc]+bestaudio/bestvideo[vcodec^=h264]+bestaudio/best[vcodec^=avc]/best[vcodec^=h264]/bestvideo+bestaudio/best'
         
-        last_logged_percent = -1
-        def console_progress_hook(d):
-            nonlocal last_logged_percent
-            if d['status'] == 'downloading':
-                try:
-                    p_str = d.get('_percent_str', '0%').replace('%','').strip()
-                    p = int(float(p_str))
-                    if p >= last_logged_percent + 2:
-                        last_logged_percent = (p // 2) * 2
-                        logging.info(f"[YT-DLP] Download progress: {p}%")
-                except: pass
-        
-        ydl_opts['progress_hooks'] = [console_progress_hook]
         info, prepared_name = await asyncio.to_thread(_run_ytdlp_extract, ydl_opts, url)
 
         metadata = {
@@ -1304,6 +1300,10 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False, progress_cal
                 'app_name': ['tiktok_web'],
                 'app_version': [''],
             }
+        },
+        'fixup': 'detect_or_warn',
+        'postprocessor_args': {
+            'ffmpeg': ['-movflags', '+faststart']
         },
         # Не указываем target явно — yt-dlp сам выберет доступный на ARM64
     }
