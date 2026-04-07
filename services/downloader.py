@@ -52,6 +52,8 @@ def generate_video_thumbnail(video_path: Path, output_path: Path) -> bool:
         logging.error(f"Error generating thumbnail: {e}")
         return False
 
+    return 0, 0
+
 def probe_video_dimensions(video_path: Path) -> Tuple[int, int]:
     """Probe video dimensions using ffprobe."""
     try:
@@ -70,6 +72,49 @@ def probe_video_dimensions(video_path: Path) -> Tuple[int, int]:
     except Exception:
         pass
     return 0, 0
+
+def probe_video_codec(video_path: Path) -> str:
+    """Probe video codec using ffprobe."""
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(video_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            return result.stdout.strip().lower()
+    except Exception:
+        pass
+    return ""
+
+def convert_video_to_h264(input_path: Path) -> Path:
+    """Convert video to H.264 using ffmpeg with fast settings."""
+    output_path = input_path.parent / f"{input_path.stem}_h264.mp4"
+    try:
+        logging.info(f"Transcoding {input_path.name} to H.264 (iPhone compatibility)")
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(input_path),
+            "-c:v", "libx264",
+            "-preset", "ultrafast",  # Minimal CPU usage (high speed)
+            "-crf", "23",            # Standard quality
+            "-c:a", "copy",          # Keep audio as is
+            "-movflags", "+faststart",
+            str(output_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode == 0 and output_path.exists():
+            input_path.unlink()  # Delete original VP9 file
+            return output_path
+    except Exception as e:
+        logging.error(f"Failed to transcode video: {e}")
+    
+    if output_path.exists():
+        output_path.unlink()
+    return input_path  # Return original if failed
 
 # TLS fingerprints для curl-cffi (имитация браузеров)
 # Список реально доступных targets в curl_cffi 0.5.10 (формат из --list-impersonate-targets)
@@ -1240,6 +1285,14 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
         file_path = _select_best_downloaded_file(downloaded_files)
         if not skip_cleanup: _cleanup_extra_files(downloaded_files, file_path)
         
+        # --- IPHONE COMPATIBILITY CHECK ---
+        # If video is VP9 or AV1, convert it to H.264 for iPhone support
+        if not is_music and file_path.suffix.lower() in ('.mp4', '.webm', '.mkv'):
+            codec = await asyncio.to_thread(probe_video_codec, file_path)
+            if codec in ('vp9', 'av1'):
+                file_path = await asyncio.to_thread(convert_video_to_h264, file_path)
+        # ----------------------------------
+
         if file_path.suffix == '.unknown_video':
             if file_path.stat().st_size < 500 * 1024:
                 file_path.unlink()
