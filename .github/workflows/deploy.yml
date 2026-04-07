@@ -1,4 +1,4 @@
-name: Deploy Bot to Raspberry Pi
+name: Digital Ocean deploy
 
 on:
   push:
