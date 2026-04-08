@@ -1,0 +1,72 @@
+version: "3.9"
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  ytttins-dl Java bot — Docker Compose                        ║
+# ║                                                              ║
+# ║  Services:                                                   ║
+# ║    bot        – Spring Boot Telegram bot (this project)      ║
+# ║    postgres   – PostgreSQL database                          ║
+# ║    cobalt     – Cobalt API (optional fallback downloader)    ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+services:
+
+  # ── Main bot ─────────────────────────────────────────────────────────────────
+  bot:
+    build: .
+    container_name: ytttins-dl-java
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - TZ=${TZ:-Europe/Moscow}
+      # PostgreSQL overrides (used when DATABASE_URL is not explicitly set)
+      - DATABASE_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB:-botdb}
+      - POSTGRES_USER=${POSTGRES_USER:-bot}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - DB_DRIVER=org.postgresql.Driver
+      - DB_DIALECT=org.hibernate.dialect.PostgreSQLDialect
+      - COBALT_API_URL_PUBLIC=http://cobalt:9000
+    ports:
+      - "${WEBAPP_PORT:-8443}:8443"
+    volumes:
+      - bot_downloads:/app/downloads
+      - bot_data:/app/data
+      - bot_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: ytttins-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-bot}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - POSTGRES_DB=${POSTGRES_DB:-botdb}
+      - TZ=${TZ:-Europe/Moscow}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bot} -d ${POSTGRES_DB:-botdb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Cobalt API (optional) ──────────────────────────────────────────────────────
+  cobalt:
+    image: ghcr.io/imputnet/cobalt:latest
+    container_name: ytttins-cobalt
+    restart: unless-stopped
+    environment:
+      - API_URL=http://cobalt:9000
+      - CORS_WILDCARD=1
+    profiles:
+      - cobalt   # start only with: docker compose --profile cobalt up
+
+volumes:
+  bot_downloads:
+  bot_data:
+  postgres_data:
+  bot_logs:
