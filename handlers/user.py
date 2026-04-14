@@ -1110,7 +1110,7 @@ async def handle_format_selection(callback: types.CallbackQuery, bot: Bot):
         
         try:
             is_music = True
-            file_path, thumbnail_path, metadata = await download_media(url, is_music, progress_callback=update_status, min_duration=60)
+            file_path, thumbnail_path, metadata = await download_media(url, is_music, progress_callback=update_status)
 
             display_name, stored_name, handle = resolve_user_identity(callback.from_user)
             stats.add_active_user(callback.from_user.id)
