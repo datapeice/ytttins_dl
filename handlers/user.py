@@ -52,14 +52,14 @@ def resolve_user_identity(user: types.User) -> tuple[str, str, str]:
 
 def format_caption(metadata: dict, platform: str, original_url: str = "", is_music: bool = False) -> str:
     """Generate unified caption format for all platforms."""
-    uploader = metadata.get('uploader', 'Unknown')
+    uploader = metadata.get('uploader') or 'Unknown'
     url = original_url or metadata.get('webpage_url', '')
     
     # Check for verified status in metadata
     is_verified = metadata.get('verified') or metadata.get('creator_is_verified') or metadata.get('uploader_is_verified') or metadata.get('channel_is_verified')
     
     # Strip leading @
-    uploader = uploader.lstrip('@')
+    uploader = str(uploader).lstrip('@')
     # Escape HTML special characters in uploader name
     uploader = str(uploader).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
