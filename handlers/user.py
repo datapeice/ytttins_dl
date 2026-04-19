@@ -60,7 +60,7 @@ def format_caption(metadata: dict, platform: str, original_url: str = "", is_mus
     if is_music:
         caption = f"<a href=\"{url}\">{title}</a>\nDeveloped by @datapeice"
     else:
-        caption = f"<a href=\"{url}\">Link</a>"
+        caption = f"<a href=\"{url}\">Link</a>\nDeveloped by @datapeice"
     return caption
 
 async def probe_media_duration_seconds(media_path: Path) -> int:
