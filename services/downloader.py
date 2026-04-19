@@ -708,6 +708,8 @@ def _download_generic_stream(url: str, proxy_url: Optional[str] = None) -> Optio
     }
 
     try:
+        if not url.startswith('http'):
+            return None
         resp = requests.get(url, headers=headers, proxies=proxies, timeout=15, allow_redirects=True)
         if resp.status_code != 200:
             return None
@@ -1154,7 +1156,13 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
     cookie_file = DATA_DIR / "cookies.txt"
 
     is_reddit = "reddit.com" in url or "redd.it" in url
-    is_youtube = "youtube.com" in url or "youtu.be" in url
+
+    ytm_custom_query = None
+    if url.startswith("ytmcustomsearch:"):
+        ytm_custom_query = url.replace("ytmcustomsearch:", "", 1)
+        url = ytm_custom_query
+        
+    is_youtube = "youtube.com" in url or "youtu.be" in url or ytm_custom_query is not None
     is_instagram = "instagram.com" in url
     user_agent = USER_AGENTS[0]
     use_impersonate = True
@@ -1194,6 +1202,8 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
             'concurrent_fragment_downloads': 1, # Avoid thread safety issues with curl_cffi
             'hls_prefer_native': True,          # Use native downloader for HLS where possible
         }
+        if ytm_custom_query:
+            ydl_opts['default_search'] = 'https://music.youtube.com/search?q='
 
         if min_duration > 0:
             def duration_filter(info_dict, *, incomplete):

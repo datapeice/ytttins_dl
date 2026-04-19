@@ -20,15 +20,23 @@ def fetch_tiktok_metadata(url: str) -> Dict:
         'Accept': 'application/json, text/plain, */*',
     }
     try:
-        response = requests.get(
-            'https://www.tikwm.com/api/',
-            params={'url': url, 'hd': 0},
-            headers=headers,
-            timeout=10
-        )
-        data = response.json()
-        if data.get('code') != 0:
-            return {}
+        import time
+        max_retries = 3
+        data = {}
+        for attempt in range(max_retries):
+            response = requests.get(
+                'https://www.tikwm.com/api/',
+                params={'url': url, 'hd': 0},
+                headers=headers,
+                timeout=10
+            )
+            data = response.json()
+            if data.get('code') != 0:
+                if 'Free Api Limit' in data.get('msg', '') and attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                return {}
+            break
         result = data.get('data', {})
         author = result.get('author', {})
         unique_id = author.get('unique_id') or author.get('nickname') or ''
@@ -149,15 +157,26 @@ def download_tikwm(link: str, output_dir: Path) -> Tuple[List[Path], Dict]:
         'hd': 1
     }
     
-    response = requests.get(api_url, params=params, headers=headers, timeout=15)
-    
-    if response.status_code != 200:
-        raise Exception(f"tikwm API returned status {response.status_code}")
-    
-    data = response.json()
-    
-    if data.get('code') != 0:
-        raise Exception(f"tikwm API error: {data.get('msg', 'Unknown error')}")
+    import time
+    max_retries = 3
+    data = {}
+    for attempt in range(max_retries):
+        response = requests.get(api_url, params=params, headers=headers, timeout=15)
+        
+        if response.status_code != 200:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            raise Exception(f"tikwm API returned status {response.status_code}")
+        
+        data = response.json()
+        
+        if data.get('code') != 0:
+            if "Free Api Limit" in data.get('msg', '') and attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            raise Exception(f"tikwm API error: {data.get('msg', 'Unknown error')}")
+        break
     
     result = data.get('data', {})
     

@@ -362,8 +362,8 @@ async def handle_search(message: types.Message):
 
     try:
         search_methods = [
+            ("yt music", f"ytmcustomsearch:{query}"),
             ("soundcloud", f"scsearch1:{query}"),
-            ("yt music", f"ytmusicsearch1:{query}"),
             ("youtube", f"ytsearch1:{query} official audio")
         ]
         
@@ -623,40 +623,50 @@ async def process_torrent_download(event: Union[types.Message, types.ChosenInlin
             file_num = f"({i+1}/{len(media_files)}) " if len(media_files) > 1 else ""
             caption = f"📦 {file_num}<b>{file_path.name}</b>\n\nDownloaded via Torrent | Developed by @datapeice"
             
-            try:
-                # Video extensions
-                if ext in {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.ts'}:
-                    duration = await probe_media_duration_seconds(file_path)
-                    await bot.send_video(
-                        dest_chat_id,
-                        types.FSInputFile(file_path),
-                        caption=caption,
-                        duration=duration,
-                        supports_streaming=True,
-                        parse_mode='HTML'
-                    )
-                # Audio extensions
-                elif ext in {'.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus'}:
-                    await bot.send_audio(
-                        dest_chat_id,
-                        types.FSInputFile(file_path),
-                        caption=caption,
-                        parse_mode='HTML'
-                    )
-                # Fallback for other media as documents
-                else:
-                    await bot.send_document(
-                        dest_chat_id,
-                        types.FSInputFile(file_path),
-                        caption=caption,
-                        parse_mode='HTML'
-                    )
-            except Exception as e:
-                logging.error(f"Failed to upload torrent file {file_path.name}: {e}")
-                prompt_msg = f"❌ Failed to upload {file_path.name[:50]}: {str(e)[:50]}..."
-                await bot.send_message(dest_chat_id, prompt_msg)
+            # Retry logic for FloodControl and pause
+            for attempt in range(4):
+                try:
+                    # Video extensions
+                    if ext in {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.ts'}:
+                        duration = await probe_media_duration_seconds(file_path)
+                        await bot.send_video(
+                            dest_chat_id,
+                            types.FSInputFile(file_path),
+                            caption=caption,
+                            duration=duration,
+                            supports_streaming=True,
+                            parse_mode='HTML'
+                        )
+                    # Audio extensions
+                    elif ext in {'.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus'}:
+                        await bot.send_audio(
+                            dest_chat_id,
+                            types.FSInputFile(file_path),
+                            caption=caption,
+                            parse_mode='HTML'
+                        )
+                    # Fallback for other media as documents
+                    else:
+                        await bot.send_document(
+                            dest_chat_id,
+                            types.FSInputFile(file_path),
+                            caption=caption,
+                            parse_mode='HTML'
+                        )
+                    break  # Success
+                except TelegramRetryAfter as e:
+                    sleep_time = e.retry_after + 1
+                    logging.warning(f"Torrent upload flood control: sleeping for {sleep_time}s")
+                    await asyncio.sleep(sleep_time)
+                except Exception as e:
+                    logging.error(f"Failed to upload torrent file {file_path.name}: {e}")
+                    prompt_msg = f"❌ Failed to upload {file_path.name[:50]}: {str(e)[:50]}..."
+                    await bot.send_message(dest_chat_id, prompt_msg)
+                    break  # Don't retry on non-flood errors
             
-            # Individual file upload...
+            # Add a small pause between files to prevent sending messages too fast
+            if i < len(media_files) - 1:
+                await asyncio.sleep(2.5)
                 
         await status_message.delete()
         # Extract original tracker URL if possible
