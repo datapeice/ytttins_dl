@@ -153,7 +153,7 @@ async def cmd_me(message: types.Message):
     
     profile = stats.get_user_profile(user_id)
     is_premium = bool(profile.get("is_premium") if isinstance(profile, dict) else profile.is_premium)
-    premium_site_limit = 10
+    daily_limit = 5
     total_downloads = stats.get_user_downloads_count(user_id)
 
     kb_builder = InlineKeyboardBuilder()
@@ -169,8 +169,8 @@ async def cmd_me(message: types.Message):
         status = f"🆓 <b>Premium Status:</b> Inactive"
         if stats.get_app_setting("premium_limits_enabled", "True") == "True":
             daily_downloads = profile.get("daily_premium_site_downloads", 0) if isinstance(profile, dict) else profile.daily_premium_site_downloads
-            status += f"\n📊 Premium Site Downloads Today: {daily_downloads}/{premium_site_limit}"
-            status += f"\n⏱ Remaining Premium Videos Today: {max(0, premium_site_limit - daily_downloads)}"
+            status += f"\n📊 Premium Site Downloads Today: {daily_downloads}/{daily_limit}"
+            status += f"\n⏱ Remaining Premium Videos Today: {max(0, daily_limit - daily_downloads)}"
 
     kb_builder.add(InlineKeyboardButton(text="⭐️ Support Bot (Donate)", callback_data="show_donate_menu"))
 
@@ -335,18 +335,22 @@ async def handle_search(message: types.Message):
         await message.answer("❌ Please provide a song name.")
         return
 
-    # Start fetching rich metadata in parallel with search/download
-    metadata_task = asyncio.create_task(fetch_song_metadata(query))
-
+    user_id = message.from_user.id
+    profile = stats.get_user_profile(user_id)
+    is_premium = bool(profile.get("is_premium") if isinstance(profile, dict) else profile.is_premium)
+    
     reply_kwargs = {}
     if message.chat.type != 'private':
         reply_kwargs['reply_to_message_id'] = message.message_id
         stats.add_active_group(message.chat.id)
-
+    
     # Whitelist check
     if stats.whitelisted_users and not stats.is_whitelisted(message.from_user.username):
         await message.answer("⛔ Sorry, this bot is private. You are not in the whitelist.", **reply_kwargs)
         return
+    
+    # Start fetching rich metadata in parallel with search/download
+    metadata_task = asyncio.create_task(fetch_song_metadata(query))
 
     is_group = message.chat.type != 'private'
 
@@ -433,7 +437,7 @@ async def handle_search(message: types.Message):
                 f"URL: {video_url} | "
                 f"Title: {history_title}"
             )
-                
+            
             caption = format_caption(metadata, successful_platform, video_url, is_music=True)
             
             # Override thumbnail with high-res cover if available
@@ -538,10 +542,22 @@ async def handle_torrent_confirm(callback: types.CallbackQuery, bot: Bot):
 
 async def process_torrent_download(event: Union[types.Message, types.ChosenInlineResult], source: str, bot: Bot, status_message: types.Message = None, is_file_id: bool = False):
     """Core logic to download and upload torrent content."""
-    display_name, stored_name, handle = resolve_user_identity(event.from_user)
     user_id = event.from_user.id
-
     profile = stats.get_user_profile(user_id)
+    is_premium = bool(profile.get("is_premium") if isinstance(profile, dict) else profile.is_premium)
+
+    if not is_premium:
+        limits_enabled = stats.get_app_setting("premium_limits_enabled", "True") == "True"
+        if limits_enabled:
+            daily_downloads = profile.get("daily_premium_site_downloads", 0) if isinstance(profile, dict) else profile.daily_premium_site_downloads
+            if daily_downloads >= 5:
+                if status_message: await status_message.delete()
+                # Use answer method depending on event type
+                if isinstance(event, types.Message):
+                    await event.answer("❌ You have reached your daily limit of 5 downloads.\n⭐️ Donate 50+ stars (/donate) to unlock Premium and remove limits!")
+                return
+
+    display_name, stored_name, handle = resolve_user_identity(event.from_user)
     sem = user_sems.premium_sems[user_id]
 
     # Don't ask the user to wait via message if the semaphore is available.
@@ -676,8 +692,13 @@ async def process_torrent_download(event: Union[types.Message, types.ChosenInlin
         elif isinstance(torrent_source, str) and torrent_source.startswith("http"):
             tracker_url = torrent_source
         # Record stat once for the whole torrent
-        stats.add_download('Torrent', user_id, stored_name, 'torrent', 'torrent_file', tracker_url)
-        download_logger.info(f"Torrent success: {display_name} ({handle}) downloaded {len(media_files)} files")
+        torrent_name = torrent_info.get('name', 'Torrent')
+        stats.add_download('Torrent', user_id, stored_name, 'torrent', 'torrent_file', tracker_url, title=torrent_name)
+        download_logger.info(f"Torrent success: {display_name} ({handle}) downloaded {len(media_files)} files: {torrent_name}")
+        
+        # Torrent successfully sent, increment daily limit for free users
+        if not is_premium:
+            stats.increment_daily_premium(user_id)
 
     except Exception as e:
         error_msg = str(e)
@@ -739,13 +760,15 @@ async def handle_url(message: types.Message, bot: Bot):
     profile = stats.get_user_profile(user_id)
     is_premium = bool(profile.get("is_premium") if isinstance(profile, dict) else profile.is_premium)
     is_prem_site = is_premium_site(target_url)
+    is_torrent_magnet = target_url.startswith("magnet:") or target_url.endswith(".torrent")
     
-    if is_prem_site:
+    if (is_prem_site or is_torrent_magnet) and not is_premium:
         limits_enabled = stats.get_app_setting("premium_limits_enabled", "True") == "True"
-        if limits_enabled and not is_premium:
+        if limits_enabled:
             daily_downloads = profile.get("daily_premium_site_downloads", 0) if isinstance(profile, dict) else profile.daily_premium_site_downloads
-            if daily_downloads >= 10:
-                await message.answer("❌ You have reached your daily limit of 10 downloads from premium sites.\n⭐️ Donate 50+ stars (/donate) to unlock Premium and remove limits!")
+            if daily_downloads >= 5:
+                await message.answer("❌ You have reached your daily limit of 5 downloads from premium sites / torrents.\n⭐️ Donate 50+ stars (/donate) to unlock Premium and remove limits!")
+                if sem: sem.release()
                 return
 
     # Semaphore selection
@@ -1070,8 +1093,10 @@ async def handle_url(message: types.Message, bot: Bot):
     finally:
         if sem:
             sem.release()
-            if is_prem_site and 'error_msg' not in locals():
-                stats.increment_daily_premium(user_id)
+            
+        # Daily limit increment for free users for premium sites/torrents
+        if sem and 'error_msg' not in locals() and not is_premium and (is_prem_site or platform == "torrent"):
+            stats.increment_daily_premium(user_id)
 
 @router.callback_query(F.data.startswith("format:"))
 async def handle_format_selection(callback: types.CallbackQuery, bot: Bot):
