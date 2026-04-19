@@ -379,8 +379,8 @@ async def handle_search(message: types.Message):
 
     try:
         search_methods = [
-            ("yt music", f"ytmcustomsearch:{refined_query} song"),
-            ("youtube", f"ytsearch1:{refined_query} official audio")
+            ("youtube", f"ytsearch1:{refined_query} official audio"),
+            ("yt music", f"ytmcustomsearch:{refined_query} song")
         ]
         
         file_path, thumbnail_path, metadata = None, None, {}
@@ -760,6 +760,8 @@ def is_premium_site(url: str) -> bool:
 @router.message(lambda m: m.text and not m.text.startswith(('/start', '/panel', '/whitelist', '/unwhitelist', 'add @', '/song')) and not m.text.lower().startswith('найти ') and not m.text.lower().startswith('search '))
 async def handle_url(message: types.Message, bot: Bot):
     # Accept any URL-like string or magnet link
+    sem = None
+    sem_acquired = False
     url_pattern = r'(?:https?://|www\.|magnet:\?xt=urn:btih:)[^\s<>"]+'
     
     match = re.search(url_pattern, message.text)
@@ -786,11 +788,9 @@ async def handle_url(message: types.Message, bot: Bot):
             daily_downloads = profile.get("daily_premium_site_downloads", 0) if isinstance(profile, dict) else profile.daily_premium_site_downloads
             if daily_downloads >= 5:
                 await message.answer("❌ You have reached your daily limit of 5 downloads from premium sites / torrents.\n⭐️ Donate 50+ stars (/donate) to unlock Premium and remove limits!")
-                if sem: sem.release()
                 return
 
     # Semaphore selection
-    sem = None
     is_torrent_magnet = target_url.startswith("magnet:") or target_url.endswith(".torrent")
     if is_prem_site or is_torrent_magnet:
         sem = user_sems.premium_sems[user_id]
@@ -803,6 +803,7 @@ async def handle_url(message: types.Message, bot: Bot):
 
     if sem:
         await sem.acquire()
+        sem_acquired = True
     
     if queued_msg:
         try:
@@ -820,7 +821,6 @@ async def handle_url(message: types.Message, bot: Bot):
                 "Please copy the full URL from the video page.",
                 **reply_kwargs
             )
-            if sem: sem.release()
             return
 
     # Whitelist check
@@ -1109,11 +1109,11 @@ async def handle_url(message: types.Message, bot: Bot):
             await message.answer(user_error, parse_mode='Markdown' if '```' in user_error else None, **reply_kwargs)
             
     finally:
-        if sem:
+        if sem_acquired:
             sem.release()
             
         # Daily limit increment for free users for premium sites/torrents
-        if sem and 'error_msg' not in locals() and not is_premium and (is_prem_site or platform == "torrent"):
+        if sem_acquired and 'error_msg' not in locals() and not is_premium and (is_prem_site or platform == "torrent"):
             stats.increment_daily_premium(user_id)
 
 @router.callback_query(F.data.startswith("format:"))
