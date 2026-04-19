@@ -52,15 +52,31 @@ def resolve_user_identity(user: types.User) -> tuple[str, str, str]:
 
 def format_caption(metadata: dict, platform: str, original_url: str = "", is_music: bool = False) -> str:
     """Generate unified caption format for all platforms."""
+    uploader = metadata.get('uploader', 'Unknown')
     url = original_url or metadata.get('webpage_url', '')
+    
+    # Check for verified status in metadata
+    is_verified = metadata.get('verified') or metadata.get('creator_is_verified') or metadata.get('uploader_is_verified') or metadata.get('channel_is_verified')
+    
+    # Strip leading @
+    uploader = uploader.lstrip('@')
+    # Escape HTML special characters in uploader name
+    uploader = str(uploader).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
     title = metadata.get('title', 'Media')
     title = str(title).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    
+    if is_verified:
+        # Use a combination of a visible emoji and custom tg-emoji if supported
+        uploader = f"{uploader} <tg-emoji emoji-id=\"5233582409416448551\">✅</tg-emoji>"
 
     if is_music:
         caption = f"<a href=\"{url}\">{title}</a>\nDeveloped by @datapeice"
     else:
-        caption = f"<a href=\"{url}\">Link</a>\nDeveloped by @datapeice"
+        if uploader.lower() != "unknown" or platform == "tiktok":
+            caption = f"👤 {uploader} | <a href=\"{url}\">Link</a>\nDeveloped by @datapeice"
+        else:
+            caption = f"<a href=\"{url}\">Link</a>\nDeveloped by @datapeice"
     return caption
 
 async def probe_media_duration_seconds(media_path: Path) -> int:
