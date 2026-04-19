@@ -58,7 +58,7 @@ def get_history_platform_label(url: str) -> str:
         return "Link"
 
     url_lower = url.lower()
-    if "youtube.com" in url_lower or "youtu.be" in url_lower:
+    if "youtube.com" in url_lower or "youtu.be" in url_lower or "ytmcustomsearch" in url_lower:
         return "YouTube"
     if "tiktok.com" in url_lower:
         return "TikTok"
@@ -70,8 +70,10 @@ def get_history_platform_label(url: str) -> str:
         return "Facebook"
     if "twitch.tv" in url_lower:
         return "Twitch"
-    if "soundcloud.com" in url_lower:
+    if "soundcloud.com" in url_lower or "scsearch" in url_lower:
         return "SoundCloud"
+    if "rutracker.org" in url_lower or "torrent" in url_lower or "magnet:" in url_lower:
+        return "Torrent"
 
     domain = urlparse(url_lower).netloc
     if domain.startswith("www."):
@@ -507,10 +509,12 @@ async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext
                             date_str = _fmt_timestamp(h.timestamp)
                             
                             url = h.url if h.url else ""
-                            platform = get_history_platform_label(url)
                             display_username = format_history_username(h.username)
                             
-                            safe_label = str(platform).replace('[', '').replace(']', '')
+                            # Use title as label, fallback to platform domain
+                            label = h.title if h.title else get_history_platform_label(url)
+                            safe_label = str(label).replace('[', '').replace(']', '').replace('(', '').replace(')', '')
+                            if len(safe_label) > 40: safe_label = safe_label[:37] + "..."
 
                             text += f"`{h.id}` | `{date_str}` | {display_username} | [{safe_label}]({url})\n"
                         
@@ -567,10 +571,25 @@ async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext
                                 url_match = re.search(r'URL: (https?://\S+)', rest)
                                 url = url_match.group(1) if url_match else ""
 
-                                platform = get_history_platform_label(url)
-                                display_username = format_history_username(handle_value)
+                                title_match = re.search(r'Title: (.+)', rest)
+                                if title_match:
+                                    label = title_match.group(1).strip()
+                                else:
+                                    label = get_history_platform_label(url)
                                 
-                                safe_label = str(platform).replace('[', '').replace(']', '')
+                                display_username = format_history_username(handle_value)
+                                safe_label = str(label).replace('[', '').replace(']', '').replace('(', '').replace(')', '')
+                                
+                                # If label is still generic "Link" or "Unknown", try harder to get the platform from URL
+                                if safe_label in ["Link", "Unknown", "Torrent"]:
+                                    platform_label = get_history_platform_label(url)
+                                    if platform_label != "Link":
+                                        if safe_label == "Torrent":
+                                            safe_label = f"Torrent ({platform_label})"
+                                        else:
+                                            safe_label = platform_label
+
+                                if len(safe_label) > 40: safe_label = safe_label[:37] + "..."
 
                                 text += f"`{date_str}` | {display_username} | [{safe_label}]({url})\n"
                             except:

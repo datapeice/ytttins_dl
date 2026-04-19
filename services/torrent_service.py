@@ -118,10 +118,17 @@ class TorrentService:
                     })
                     data_started = True
         
+        if not name and is_magnet:
+            # Try to extract name from 'dn' (display name) parameter in magnet link
+            dn_match = re.search(r"dn=([^&]+)", str(torrent_source))
+            if dn_match:
+                from urllib.parse import unquote
+                name = unquote(dn_match.group(1)).replace('+', ' ')
+
         return {
             'files': files,
             'total_size': total_size,
-            'name': name
+            'name': name or "Torrent"
         }
 
     def _parse_size(self, size_str: str) -> int:

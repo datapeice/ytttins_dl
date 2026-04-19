@@ -124,10 +124,23 @@ class CobaltClient:
             logging.info(f"Cobalt response status: {status}")
             
             if status == "error":
-                error_code = response.get("error", {}).get("code", "unknown")
-                error_msg = response.get("error", {}).get("context", "Unknown error")
+                error_obj = response.get("error", {})
+                error_code = error_obj.get("code", "unknown")
+                error_context = error_obj.get("context", {})
+                
+                # Friendly error mapping
+                error_map = {
+                    "error.api.content.video.unavailable": "This video is unavailable (it might be private, deleted, or geoblocked).",
+                    "error.api.link.invalid": "The link you provided is invalid or not supported by Cobalt.",
+                    "error.api.link.unsupported": f"This service ({error_context.get('service', 'unknown')}) is not supported for this specific link.",
+                    "error.api.fetch.empty": "Could not find any media at this link. It might be a photo-only post or require login.",
+                    "error.api.content.post.age": "This post is age-restricted and cannot be downloaded without authentication.",
+                    "error.api.fetch.fail": "Cobalt failed to fetch the content. The site might be blocking the request.",
+                }
+                
+                error_msg = error_map.get(error_code, f"Cobalt error: {error_code}")
                 logging.error(f"Cobalt error: {error_code} - {error_msg}")
-                raise Exception(f"Cobalt error: {error_msg}")
+                raise Exception(error_msg)
             
             elif status == "redirect":
                 # Прямая ссылка на файл

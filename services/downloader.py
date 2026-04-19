@@ -900,6 +900,27 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             logging.error(f"[COBALT] ❌ Error (Instagram audio): {audio_error}")
         return files
     
+    async def wrapped_callback(current):
+        if progress_callback:
+            await progress_callback(current)
+
+    # Resolve Threads normalization: threads.com -> threads.net
+    if "threads.com" in url:
+        url = url.replace("threads.com", "threads.net")
+        logging.info(f"Normalized Threads URL to: {url}")
+
+    # Resolve music searches normalization: scsearch -> ytsearch
+    if url.startswith("scsearch"):
+        url = url.replace("scsearch", "ytmcustomsearch:ytsearch", 1)
+        logging.info(f"Replaced SoundCloud search with YT Music search: {url}")
+
+    # Resolve ytmusicsearch scheme issue
+    if url.startswith("ytmusicsearch"):
+        # Convert ytmusicsearch1:query to ytmcustomsearch:ytsearch1:query
+        # or simply ytmcustomsearch:query and let it use default_search
+        url = url.replace("ytmusicsearch", "ytmcustomsearch:ytsearch", 1)
+        logging.info(f"Fixed YT Music search scheme: {url}")
+
     # Resolve short URLs to detect slideshows and help yt-dlp
     if "vm.tiktok.com" in url or "vt.tiktok.com" in url or "/t/" in url:
         try:
@@ -1144,6 +1165,12 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 logging.error(f"[GENERIC-STREAM] ❌ Failed: {gen_err}")
 
         # Все методы провалились
+        error_msg = str(ytdlp_error) if ytdlp_error else "Unknown error"
+        if "blocked in your area" in error_msg or "Viewing restrictions" in error_msg:
+            raise Exception(f"Video is blocked in the server's region. Try using a proxy or a different link. (Error: {error_msg})")
+        elif "login required" in error_msg.lower() and platform == "instagram":
+            raise Exception("Instagram requires new cookies. Please contact the administrator to update cookies.txt.")
+        
         raise Exception(f"All download methods failed. YT-DLP error: {ytdlp_error}")
     finally:
         if status_task:
@@ -1480,6 +1507,9 @@ async def _download_tiktok_tikwm(url: str) -> Tuple[Path, Optional[Path], Dict]:
     
     api_url = 'https://www.tikwm.com/api/'
     params = {'url': url, 'hd': 1}
+    
+    # Add a small delay for TikWM free tier limit (1 req/sec)
+    await asyncio.sleep(1.5)
     
     response = requests.get(api_url, params=params, headers=headers, timeout=15)
     

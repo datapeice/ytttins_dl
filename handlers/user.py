@@ -77,8 +77,10 @@ def format_caption(metadata: dict, platform: str, original_url: str = "", is_mus
     
     if is_music:
         parts.append(f"<a href=\"{url}\">{title}</a>")
+    elif title and title not in ["Media", "Video", "Link"]:
+        parts.append(f"<a href=\"{url}\">{title}</a>")
     else:
-        # Video: only "Link" without title/description
+        # Video: fallback to "Link" only if title is missing or generic
         parts.append(f"<a href=\"{url}\">Link</a>")
         
     caption = " | ".join(parts) + "\n" + "Developed by @datapeice"
@@ -351,6 +353,17 @@ async def handle_search(message: types.Message):
     
     # Start fetching rich metadata in parallel with search/download
     metadata_task = asyncio.create_task(fetch_song_metadata(query))
+    
+    # Wait briefly for metadata to refine search accuracy
+    refined_query = query
+    try:
+        # 1.5s is usually enough for iTunes API
+        itunes_meta = await asyncio.wait_for(asyncio.shield(metadata_task), timeout=1.5)
+        if itunes_meta.get('artist') and itunes_meta.get('title'):
+            refined_query = f"{itunes_meta['artist']} - {itunes_meta['title']}"
+            logging.info(f"Refined search query: {refined_query}")
+    except Exception:
+        pass
 
     is_group = message.chat.type != 'private'
 
@@ -366,9 +379,8 @@ async def handle_search(message: types.Message):
 
     try:
         search_methods = [
-            ("yt music", f"ytmcustomsearch:{query}"),
-            ("soundcloud", f"scsearch1:{query}"),
-            ("youtube", f"ytsearch1:{query} official audio")
+            ("yt music", f"ytmcustomsearch:{refined_query} song"),
+            ("youtube", f"ytsearch1:{refined_query} official audio")
         ]
         
         file_path, thumbnail_path, metadata = None, None, {}
@@ -694,7 +706,13 @@ async def process_torrent_download(event: Union[types.Message, types.ChosenInlin
         # Record stat once for the whole torrent
         torrent_name = torrent_info.get('name', 'Torrent')
         stats.add_download('Torrent', user_id, stored_name, 'torrent', 'torrent_file', tracker_url, title=torrent_name)
-        download_logger.info(f"Torrent success: {display_name} ({handle}) downloaded {len(media_files)} files: {torrent_name}")
+        download_logger.info(
+            f"User: {display_name} ({handle}, ID: {user_id}) | "
+            f"Platform: torrent | "
+            f"Type: Torrent | "
+            f"URL: {tracker_url} | "
+            f"Title: {torrent_name}"
+        )
         
         # Torrent successfully sent, increment daily limit for free users
         if not is_premium:
