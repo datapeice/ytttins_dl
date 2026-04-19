@@ -52,38 +52,15 @@ def resolve_user_identity(user: types.User) -> tuple[str, str, str]:
 
 def format_caption(metadata: dict, platform: str, original_url: str = "", is_music: bool = False) -> str:
     """Generate unified caption format for all platforms."""
-    uploader = metadata.get('uploader') or 'Unknown'
     url = original_url or metadata.get('webpage_url', '')
-    
-    # Check for verified status in metadata
-    is_verified = metadata.get('verified') or metadata.get('creator_is_verified') or metadata.get('uploader_is_verified') or metadata.get('channel_is_verified')
-    
-    # Strip leading @
-    uploader = str(uploader).lstrip('@')
-    # Escape HTML special characters in uploader name
-    uploader = str(uploader).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-    
+
     title = metadata.get('title', 'Media')
     title = str(title).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-    
-    if is_verified:
-        # Use a combination of a visible emoji and custom tg-emoji if supported
-        uploader = f"{uploader} <tg-emoji emoji-id=\"5233582409416448551\">✅</tg-emoji>"
 
-    parts = []
-    # Only show uploader if it's not "Unknown", or if it's TikTok (where we want to show it anyway)
-    if uploader.lower() != "unknown" or platform == "tiktok":
-        parts.append(f"👤 {uploader}")
-    
     if is_music:
-        parts.append(f"<a href=\"{url}\">{title}</a>")
-    elif title and title not in ["Media", "Video", "Link"]:
-        parts.append(f"<a href=\"{url}\">{title}</a>")
+        caption = f"<a href=\"{url}\">{title}</a>\nDeveloped by @datapeice"
     else:
-        # Video: fallback to "Link" only if title is missing or generic
-        parts.append(f"<a href=\"{url}\">Link</a>")
-        
-    caption = " | ".join(parts) + "\n" + "Developed by @datapeice"
+        caption = f"<a href=\"{url}\">Link</a>"
     return caption
 
 async def probe_media_duration_seconds(media_path: Path) -> int:
@@ -1649,4 +1626,3 @@ async def handle_inline_result_chosen(chosen_result: types.ChosenInlineResult, b
             await bot.edit_message_text(text=f"❌ Error: {str(e)[:100]}", inline_message_id=inline_message_id)
         except:
             pass
-
