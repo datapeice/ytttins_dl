@@ -6,24 +6,34 @@ from pathlib import Path
 from typing import Dict, Optional
 from config import DOWNLOADS_DIR
 
+try:
+    from ytmusicapi import YTMusic as _YTMusic
+except ImportError:
+    _YTMusic = None  # type: ignore
+
 
 async def search_ytmusic_video_id(query: str) -> Optional[str]:
     """
-    Search YouTube Music for the best matching song and return its videoId.
+    Search YouTube Music for the best matching song and return its video URL.
 
     Strategy (in order of priority):
-    1. Deezer API → ISRC code → YouTube search by ISRC (most precise)
+    1. Deezer API → ISRC code → YouTube Music search by ISRC (most precise)
     2. ytmusicapi → search in 'songs' filter → first result videoId
 
-    Returns a full YouTube URL on success, or None if nothing was found.
+    Returns a full YouTube watch URL on success, or None if nothing was found.
     """
+    if _YTMusic is None:
+        logging.warning("[SEARCH] ytmusicapi is not installed; skipping YouTube Music search")
+        return None
+
     # --- Step 1: Try to get ISRC via Deezer (no API key required) ---
     isrc = None
     try:
         deezer_url = "https://api.deezer.com/search/track"
         params = {"q": query, "limit": 1}
+        timeout = aiohttp.ClientTimeout(total=5)
         async with aiohttp.ClientSession() as session:
-            async with session.get(deezer_url, params=params, timeout=5) as resp:
+            async with session.get(deezer_url, params=params, timeout=timeout) as resp:
                 if resp.status == 200:
                     data = await resp.json(content_type=None)
                     items = data.get("data", [])
@@ -33,11 +43,16 @@ async def search_ytmusic_video_id(query: str) -> Optional[str]:
     except Exception as e:
         logging.warning(f"[SEARCH] Deezer ISRC lookup failed: {e}")
 
-    # --- Step 2a: If we have an ISRC, search YouTube directly ---
+    # Initialise the YTMusic client once and reuse it for both lookups
+    try:
+        ytm = await asyncio.to_thread(_YTMusic)
+    except Exception as e:
+        logging.warning(f"[SEARCH] YTMusic client init failed: {e}")
+        return None
+
+    # --- Step 2a: If we have an ISRC, search YouTube Music directly ---
     if isrc:
         try:
-            from ytmusicapi import YTMusic
-            ytm = await asyncio.to_thread(YTMusic)
             results = await asyncio.to_thread(ytm.search, f"isrc:{isrc}", filter="songs", limit=1)
             if results:
                 video_id = results[0].get("videoId")
@@ -49,8 +64,6 @@ async def search_ytmusic_video_id(query: str) -> Optional[str]:
 
     # --- Step 2b: Fall back to ytmusicapi plain 'songs' search ---
     try:
-        from ytmusicapi import YTMusic
-        ytm = await asyncio.to_thread(YTMusic)
         results = await asyncio.to_thread(ytm.search, query, filter="songs", limit=3)
         if results:
             video_id = results[0].get("videoId")

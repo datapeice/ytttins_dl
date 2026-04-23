@@ -374,7 +374,7 @@ async def handle_search(message: types.Message):
         # --- Primary search: ytmusicapi + Deezer ISRC (most accurate) ---
         ytm_video_url = None
         try:
-            ytm_video_url = await asyncio.wait_for(search_ytmusic_video_id(refined_query), timeout=8)
+            ytm_video_url = await asyncio.wait_for(search_ytmusic_video_id(refined_query), timeout=6)
         except Exception as ytm_err:
             logging.warning(f"[SEARCH] ytmusicapi primary search failed: {ytm_err}")
 
@@ -382,7 +382,7 @@ async def handle_search(message: types.Message):
         # If ytmusicapi returned a direct video URL, put it first.
         search_methods = []
         if ytm_video_url:
-            search_methods.append(("yt music (exact)", ytm_video_url))
+            search_methods.append(("ytmusicapi", ytm_video_url))
         search_methods += [
             ("youtube", f"ytsearch1:{refined_query} official audio"),
             ("yt music", f"ytmcustomsearch:{refined_query} song"),
