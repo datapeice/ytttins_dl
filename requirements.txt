@@ -18,6 +18,7 @@ brotli>=1.1.0
 pycryptodomex>=3.20.0
 mutagen
 websockets
+ytmusicapi>=1.11.5
 secretstorage
 yt-dlp-ejs
 spotdl>=4.2.0
