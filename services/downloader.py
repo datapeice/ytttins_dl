@@ -31,7 +31,8 @@ USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0',
 ]
 
-MAX_HTTP_ACCESS_DENIED_RETRIES = len(USER_AGENTS)
+# Maximum total yt-dlp fingerprint attempts for 403/429 access-denied errors
+MAX_HTTP_ACCESS_DENIED_RETRIES = 4
 HTTP_RETRY_DELAY_SECONDS = 1.5
 
 def generate_video_thumbnail(video_path: Path, output_path: Path) -> bool:
