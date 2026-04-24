@@ -445,7 +445,11 @@ def run_ai_extractor_autofix(url: str, error_message: str) -> Dict:
             proxies={"http": None, "https": None},
         )
         response.raise_for_status()
-        body = response.json()
+        import json
+        try:
+            body = response.json()
+        except json.JSONDecodeError:
+            body = json.loads(response.text, strict=False)
         choices = body.get("choices") if isinstance(body, dict) else None
         if not isinstance(choices, list) or not choices:
             raise ValueError("Groq response missing choices")

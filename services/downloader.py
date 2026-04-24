@@ -1170,7 +1170,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         ai_autofix_attempted = False
         ai_autofix_result = None
 
-        if should_attempt_ai_autofix(url, str(ytdlp_error)):
+        if kwargs.get('allow_ai_autofix', True) and should_attempt_ai_autofix(url, str(ytdlp_error)):
             ai_autofix_attempted = True
             try:
                 if progress_callback:

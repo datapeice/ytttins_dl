@@ -897,7 +897,7 @@ async def handle_url(message: types.Message, bot: Bot):
                     pass
 
         is_music = is_youtube_music(target_url) or platform == "soundcloud"
-        file_path, thumbnail_path, metadata = await download_media(target_url, is_music, progress_callback=update_status)
+        file_path, thumbnail_path, metadata = await download_media(target_url, is_music, progress_callback=update_status, allow_ai_autofix=not is_group)
 
         # Determine title based on file_path type
         if isinstance(file_path, list):
@@ -1104,9 +1104,8 @@ async def handle_url(message: types.Message, bot: Bot):
             user_error = "⚠️ YouTube requires authentication (cookies). Please contact the bot admin."
         elif "AI-AUTOFIX-ATTEMPTED" in error_msg:
             user_error = (
-                "🤖 AI bot autonomously attempted to apply extractor patches, but this download still failed.\n"
-                "Admin has been notified with verification details and (if enabled) PR status.\n\n"
-                f"```error\n{error_msg}\n```"
+                f"```error\n{error_msg}\n```\n\n"
+                f"Contact with developer @datapeice"
             )
         else:
             user_error = (
