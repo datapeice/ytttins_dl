@@ -714,13 +714,40 @@ def _download_generic_stream(url: str, proxy_url: Optional[str] = None) -> Optio
     try:
         if not url.startswith('http'):
             return None
-        resp = requests.get(url, headers=headers, proxies=proxies, timeout=15, allow_redirects=True)
-        if resp.status_code != 200:
+        
+        # Try direct first, then proxy fallback
+        html = None
+        for attempt_proxies in [None, proxies]:
+            if attempt_proxies is None:
+                logging.info("[GENERIC-STREAM] Trying direct fetch (no proxy)...")
+            else:
+                logging.info("[GENERIC-STREAM] Trying fetch via proxy...")
+            try:
+                resp = requests.get(url, headers=headers, proxies=attempt_proxies, timeout=15, allow_redirects=True)
+                if resp.status_code == 200:
+                    html = resp.text
+                    break
+                # If 403, also try with simple curl-like headers (bypasses some Cloudflare rules)
+                if resp.status_code == 403:
+                    simple_headers = {'User-Agent': 'curl/7.81.0', 'Accept': '*/*'}
+                    resp2 = requests.get(url, headers=simple_headers, proxies=attempt_proxies, timeout=15, allow_redirects=True)
+                    if resp2.status_code == 200:
+                        html = resp2.text
+                        break
+            except Exception as fetch_err:
+                logging.debug(f"[GENERIC-STREAM] Fetch attempt failed: {fetch_err}")
+                continue
+
+        if not html:
             return None
-        html = resp.text
 
         # Patterns for video streams, prioritized by likely quality/directness
         patterns = [
+            # OpenGraph meta tags (Danbooru, social sites, etc.)
+            r'<meta\s+(?:property|name)=["\']og:video(?::secure_url)?["\']\s+content=["\']([^"\']+)["\']',
+            r'content=["\']([^"\']+)["\']\s+(?:property|name)=["\']og:video(?::secure_url)?["\']',
+            r'<meta\s+(?:property|name)=["\']og:image["\']\s+content=["\']([^"\']+\.(?:mp4|webm|gif)[^"\']*)["\']',
+            # Standard JS/HTML patterns
             r'"file"\s*:\s*"([^"]+\.(?:mp4|m3u8|webm)[^"]*)"',
             r'"src"\s*:\s*"([^"]+\.(?:mp4|m3u8|webm)[^"]*)"',
             r'"video_url"\s*:\s*"([^"]+)"',
