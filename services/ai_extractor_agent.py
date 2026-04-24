@@ -249,21 +249,26 @@ def _validate_agent_payload(payload: Dict) -> Optional[str]:
 
 
 def _notify_admin(text: str) -> None:
-    if not BOT_TOKEN or not ADMIN_USER_ID:
+    if not BOT_TOKEN or not ADMIN_USER_ID or not text:
         return
     try:
         chat_id = int(ADMIN_USER_ID)
     except (TypeError, ValueError):
-        logging.warning("[AI-AUTOFIX] ADMIN_USER_ID is not numeric chat id; admin message skipped")
         return
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": chat_id, "text": text},
-            timeout=10,
-        )
-    except Exception as e:
-        logging.warning(f"[AI-AUTOFIX] Failed to notify admin: {e}")
+
+    # Telegram message limit is 4096. Split with safety margin.
+    limit = 4000
+    parts = [text[i:i+limit] for i in range(0, len(text), limit)]
+    
+    for part in parts:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={"chat_id": chat_id, "text": part},
+                timeout=10,
+            )
+        except Exception as e:
+            logging.warning(f"[AI-AUTOFIX] Failed to notify admin: {e}")
 
 
 def _extract_has_stream(info: Dict) -> bool:
@@ -406,14 +411,17 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
         return {"attempted": False, "reason": "disabled"}
     if not GROQ_API_KEY:
         return {"attempted": False, "reason": "missing_groq_key"}
+    
+    report_logs = []
+    def log_report(msg: str):
+        report_logs.append(msg)
+        logging.info(f"[AI-AUTOFIX] {msg}")
+
     if AI_AUTOFIX_REQUIRE_NETWORK:
         network_issue = _check_network_readiness(url)
         if network_issue:
-            _notify_admin(
-                f"❌ AI extractor autofix skipped for {url}\n"
-                f"Reason: network readiness check failed ({network_issue}).\n"
-                f"Ensure VPS has working DNS/outbound network before autofix run."
-            )
+            log_report(f"❌ AI extractor autofix skipped for {url}\nReason: network readiness check failed ({network_issue}).")
+            _notify_admin("\n".join(report_logs))
             return {"attempted": False, "success": False, "reason": f"network_not_ready:{network_issue}"}
 
     _ensure_plugin_layout()
@@ -423,21 +431,22 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
     safe_domain = re.sub(r"[^a-z0-9_]+", "_", netloc).strip("_") or "site"
     candidate_filename = f"{safe_domain}_ie.py"
     existing_code = _read_existing_extractor(candidate_filename)
+    
+    log_report(f"🤖 Starting autofix session for: {url}")
+    
     system_prompt = (
-        "You are an expert autonomous AI agent specializing in yt-dlp extractor architecture. "
-        "Your task is to write a yt-dlp InfoExtractor plugin that bypasses strict protections and extracts the raw video URL from the provided HTML snippet. "
-        "Think analytically step-by-step:\n"
-        "1. Examine the HTML snippet for video patterns (mp4, m3u8, CDN links, JSON data).\n"
-        "2. Write robust Python regex to grab those links.\n"
-        "3. Ensure your '_real_extract' method implements a fallback logic and returns the expected dictionary.\n"
-        "You MUST return strict JSON only. Use the following format:\n"
-        "{\n"
-        "  \"action\": \"new_module\",\n"
-        "  \"filename\": \"domain_ie.py\",\n"
-        "  \"code\": \"import re\\nfrom yt_dlp.extractor.common import InfoExtractor\\n...\",\n"
-        "  \"notes\": \"Explanation of your solution\"\n"
-        "}\n"
-        "If absolutely not fixable, use action=cannot_fix."
+        "You are an expert autonomous AI agent specializing in yt-dlp extractor architecture.\n"
+        "Your task is to write a yt-dlp InfoExtractor plugin that extracts video URLs.\n\n"
+        "STEPS:\n"
+        "1. Examine the HTML and error. If you need to search for site info/API, return:\n"
+        "   {\"action\": \"web_search\", \"query\": \"search query\"}\n"
+        "2. To provide the final fix, return:\n"
+        "   {\"action\": \"new_module\", \"filename\": \"domain_ie.py\", \"code\": \"python code\", \"notes\": \"...\"}\n"
+        "3. If unfixable, return:\n"
+        "   {\"action\": \"cannot_fix\", \"notes\": \"reason\"}\n\n"
+        "RULES:\n"
+        "- ALWAYS return VALID JSON.\n"
+        "- Use only standard Python + yt-dlp primitives."
     )
     user_prompt = json.dumps({
         "url": url,
@@ -452,85 +461,62 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
         {"role": "user", "content": user_prompt},
     ]
 
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "web_search",
-                "description": "Search the web for information about a website, its API, or how to extract videos from it.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "The search query."}
-                    },
-                    "required": ["query"],
-                },
-            },
-        }
-    ]
+    # No native tools array needed anymore, we do it via prompt
+    tools = None
 
-    for attempt in range(2):
+    for attempt in range(4):  # Steps allowed (e.g. search + search + fix)
         try:
+            payload_json = {
+                "model": GROQ_MODEL,
+                "temperature": 0.1,
+                "messages": messages,
+                "response_format": {"type": "json_object"},
+                "stream": False,
+            }
+
             response = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {GROQ_API_KEY}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": GROQ_MODEL,
-                    "temperature": 0.2,
-                    "messages": messages,
-                    "tools": tools,
-                    "tool_choice": "auto",
-                },
+                json=payload_json,
                 timeout=GROQ_API_TIMEOUT_SECONDS,
                 proxies={"http": None, "https": None},
             )
             response.raise_for_status()
             body = response.json()
             
-            choice = body.get("choices", [{}])[0]
-            message = choice.get("message", {})
-            
-            # Handle tool calls
-            tool_calls = message.get("tool_calls")
-            if tool_calls:
-                messages.append(message)
-                for tool_call in tool_calls:
-                    function_name = tool_call.get("function", {}).get("name")
-                    if function_name == "web_search":
-                        args = json.loads(tool_call.get("function", {}).get("arguments", "{}"))
-                        query = args.get("query")
-                        search_res = _web_search(query)
-                        messages.append({
-                            "tool_call_id": tool_call.get("id"),
-                            "role": "tool",
-                            "name": function_name,
-                            "content": search_res,
-                        })
-                # Call Groq again with search results
-                continue
-
-            content = message.get("content")
+            content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
             if not content:
-                raise ValueError("Groq response missing content")
+                raise ValueError("Empty response from Groq")
             
-            logging.info(f"[AI-AUTOFIX] Agent replied (attempt {attempt+1}).\n--- AGENT RESPONSE START ---\n{content}\n--- AGENT RESPONSE END ---")
+            log_report(f"Agent step {attempt+1} received.")
             payload = json.loads(_clean_json_response(content), strict=False)
             
+            # Manual tool handling
+            if payload.get("action") == "web_search":
+                query = payload.get("query")
+                log_report(f"🔍 AI requesting search: {query}")
+                search_res = _web_search(query)
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": f"SEARCH RESULTS:\n{search_res}\n\nPlease proceed to write the extractor or perform another search if needed."})
+                continue
+
             validation_error = _validate_agent_payload(payload)
             if validation_error:
+                log_report(f"⚠️ Attempt {attempt+1} validation failed: {validation_error}")
                 if attempt == 0:
                     messages.append({"role": "assistant", "content": content})
                     messages.append({"role": "user", "content": f"Validation failed: {validation_error}. Please correct the JSON structure or logic."})
                     continue
-                _notify_admin(f"❌ AI extractor autofix rejected output for {url} after 2 attempts\nReason: {validation_error}")
+                _notify_admin("\n".join(report_logs))
                 return {"attempted": True, "success": False, "reason": validation_error, "payload": payload}
 
             if payload.get("action") == "cannot_fix":
                 note = payload.get("notes") or "cannot_fix"
-                _notify_admin(f"⚠️ AI extractor autofix cannot fix {url}\n{note}")
+                log_report(f"⚠️ AI cannot fix this URL: {note}")
+                _notify_admin("\n".join(report_logs))
                 return {"attempted": True, "success": False, "reason": note, "payload": payload}
 
             filename = payload["filename"]
@@ -540,6 +526,7 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
 
             verify_error = _verify_generated_extractor(url, verify_opts)
             if verify_error:
+                log_report(f"⚠️ Attempt {attempt+1} verification failed: {verify_error}")
                 if attempt == 0:
                     if module_path.exists():
                         module_path.unlink()
@@ -551,15 +538,14 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
                         module_path.unlink()
                 except Exception:
                     pass
-                _notify_admin(f"❌ AI extractor autofix failed verification for {url} after 2 attempts\nReason: {verify_error}")
+                _notify_admin("\n".join(report_logs))
                 return {"attempted": True, "success": False, "reason": verify_error, "payload": payload}
 
             # Success!
             pr_result = _create_persistence_pull_request(filename, code, url)
-            _notify_admin(
-                f"✅ AI extractor autofix applied and verified module {filename} for {url}\n"
-                f"{'PR: ' + pr_result.get('url') if pr_result.get('created') else 'PR status: not created (' + str(pr_result.get('reason')) + ')'}"
-            )
+            status_pr = f"PR: {pr_result.get('url')}" if pr_result.get('created') else f"PR status: not created ({pr_result.get('reason')})"
+            log_report(f"✅ AI autofix SUCCESS for {url}\nModule: {filename}\n{status_pr}")
+            _notify_admin("\n".join(report_logs))
             return {
                 "attempted": True,
                 "success": True,
@@ -570,9 +556,11 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
             }
 
         except Exception as e:
-            _notify_admin(f"❌ AI extractor autofix failed on attempt {attempt+1} for {url}\nError: {e}")
-            if attempt == 1:
+            log_report(f"❌ Error on step {attempt+1}: {e}")
+            if attempt >= 3:
+                _notify_admin("\n".join(report_logs))
                 return {"attempted": True, "success": False, "reason": f"groq_call_failed: {e}"}
-            messages.append({"role": "user", "content": f"An error occurred: {e}. Please try again."})
+            messages.append({"role": "user", "content": f"An error occurred: {e}. Please correct your output and try again."})
 
+    _notify_admin("\n".join(report_logs))
     return {"attempted": True, "success": False, "reason": "max_retries_exceeded"}
