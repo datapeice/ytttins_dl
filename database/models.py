@@ -51,6 +51,8 @@ class UserProfile(Base):
     last_reset_date = Column(String)
     notified_expiry_soon = Column(Integer, default=0)
     notified_expired = Column(Integer, default=0)
+    referred_by = Column(BigInteger, nullable=True)
+    referral_count = Column(Integer, default=0)
 
 class AppSetting(Base):
     __tablename__ = 'app_settings'

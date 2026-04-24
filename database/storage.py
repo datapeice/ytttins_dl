@@ -41,6 +41,16 @@ class Stats:
                         sess.commit()
                     except Exception:
                         sess.rollback()
+                    try:
+                        sess.execute(text("ALTER TABLE user_profiles ADD COLUMN referred_by BIGINT"))
+                        sess.commit()
+                    except Exception:
+                        sess.rollback()
+                    try:
+                        sess.execute(text("ALTER TABLE user_profiles ADD COLUMN referral_count INTEGER DEFAULT 0"))
+                        sess.commit()
+                    except Exception:
+                        sess.rollback()
             except Exception as e:
                 logging.error(f"❌ Failed to connect to database: {e}")
                 self.db_engine = None
@@ -437,5 +447,74 @@ class Stats:
             setting.value = new_val
             session.commit()
             return new_val
+
+    def process_referral(self, new_user_id: int, referrer_id: int) -> dict:
+        """Process a referral: record who referred the new user, increment referrer's count.
+        Returns dict with 'success', 'referral_count', 'premium_granted', 'error'."""
+        if not self.Session:
+            return {'success': False, 'referral_count': 0, 'premium_granted': False}
+        
+        if new_user_id == referrer_id:
+            return {'success': False, 'referral_count': 0, 'premium_granted': False, 'error': 'self_referral'}
+        
+        with self.Session() as session:
+            # CHECK IF USER IS NEW
+            # 1. Check if they have any download history
+            has_history = session.query(DownloadHistory).filter_by(user_id=new_user_id).first() is not None
+            if has_history:
+                return {'success': False, 'referral_count': 0, 'premium_granted': False, 'error': 'not_new_user'}
+            
+            # 2. Check if they have been active before today
+            today = datetime.now().date().isoformat()
+            was_active_before = session.query(ActiveUser).filter(ActiveUser.user_id == new_user_id, ActiveUser.date < today).first() is not None
+            if was_active_before:
+                return {'success': False, 'referral_count': 0, 'premium_granted': False, 'error': 'not_new_user'}
+
+            # Ensure new user profile exists
+            new_profile = session.query(UserProfile).filter_by(user_id=new_user_id).first()
+            if not new_profile:
+                new_profile = UserProfile(user_id=new_user_id)
+                session.add(new_profile)
+                session.flush()
+            
+            # Check if this user was already referred by someone
+            if new_profile.referred_by:
+                return {'success': False, 'referral_count': 0, 'premium_granted': False, 'error': 'already_referred'}
+            
+            # Record the referral
+            new_profile.referred_by = referrer_id
+            
+            # Increment referrer's count
+            referrer = session.query(UserProfile).filter_by(user_id=referrer_id).first()
+            if not referrer:
+                referrer = UserProfile(user_id=referrer_id)
+                session.add(referrer)
+                session.flush()
+            
+            referrer.referral_count = (referrer.referral_count or 0) + 1
+            count = referrer.referral_count
+            
+            # Grant 1 day premium every 3 referrals
+            premium_granted = False
+            if count % 3 == 0:
+                referrer.is_premium = 1
+                if referrer.premium_expiry and referrer.premium_expiry > datetime.now():
+                    referrer.premium_expiry = referrer.premium_expiry + timedelta(days=1)
+                else:
+                    referrer.premium_expiry = datetime.now() + timedelta(days=1)
+                premium_granted = True
+            
+            session.commit()
+            return {'success': True, 'referral_count': count, 'premium_granted': premium_granted}
+
+    def get_referral_count(self, user_id: int) -> int:
+        """Get the referral count for a user."""
+        if not self.Session:
+            return 0
+        with self.Session() as session:
+            profile = session.query(UserProfile).filter_by(user_id=user_id).first()
+            if profile:
+                return profile.referral_count or 0
+            return 0
 
 stats = Stats()
