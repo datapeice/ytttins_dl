@@ -436,6 +436,7 @@ def run_ai_extractor_autofix(url: str, error_message: str) -> Dict:
             json={
                 "model": GROQ_MODEL,
                 "temperature": 0.2,
+                "response_format": {"type": "json_object"},
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
