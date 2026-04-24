@@ -445,7 +445,6 @@ def run_ai_extractor_autofix(url: str, error_message: str) -> Dict:
             proxies={"http": None, "https": None},
         )
         response.raise_for_status()
-        import json
         try:
             body = response.json()
         except json.JSONDecodeError:
@@ -457,7 +456,7 @@ def run_ai_extractor_autofix(url: str, error_message: str) -> Dict:
         if not isinstance(message, dict) or not isinstance(message.get("content"), str):
             raise ValueError("Groq response missing message content")
         content = message["content"]
-        payload = json.loads(_clean_json_response(content))
+        payload = json.loads(_clean_json_response(content), strict=False)
     except requests.exceptions.HTTPError as e:
         err_msg = f"HTTP Error {e.response.status_code}: {e.response.text}"
         _notify_admin(f"❌ AI extractor autofix failed to call Groq for {url}\nError: {err_msg}")

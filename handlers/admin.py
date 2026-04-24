@@ -101,7 +101,7 @@ def get_back_keyboard():
 
 @router.message(Command("whitelist"))
 async def cmd_whitelist_add(message: types.Message):
-    if message.from_user.username != ADMIN_USER_ID:
+    if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
         await message.answer("You don't have permission to manage the whitelist.")
         return
         
@@ -118,7 +118,7 @@ async def cmd_whitelist_add(message: types.Message):
 
 @router.message(Command("unwhitelist"))
 async def cmd_whitelist_remove(message: types.Message):
-    if message.from_user.username != ADMIN_USER_ID:
+    if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
         await message.answer("You don't have permission to manage the whitelist.")
         return
         
@@ -134,7 +134,7 @@ async def cmd_whitelist_remove(message: types.Message):
         await message.answer(f"⚠️ User @{username} is not in the whitelist.")
 @router.message(Command("addpremium"))
 async def cmd_addpremium(message: types.Message):
-    if message.from_user.username != ADMIN_USER_ID:
+    if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
         await message.answer("You don't have permission.")
         return
         
@@ -182,7 +182,7 @@ async def cmd_addpremium(message: types.Message):
 
 @router.message(Command("removepremium"))
 async def cmd_removepremium(message: types.Message):
-    if message.from_user.username != ADMIN_USER_ID:
+    if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
         return
         
     args = message.text.split()[1:]
@@ -218,7 +218,7 @@ async def cmd_removepremium(message: types.Message):
         await message.answer(f"❌ Error: {str(e)}")
 @router.message(Command("panel"))
 async def send_admin_panel(message: types.Message):
-    if message.from_user.username != ADMIN_USER_ID:
+    if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
         await message.answer("You don't have permission to access the admin panel.")
         return
 
@@ -267,7 +267,7 @@ async def send_admin_panel(message: types.Message):
 # Broadcast message handlers - Must be before general admin handler
 @router.callback_query(F.data == "admin:broadcast")
 async def start_broadcast(callback: types.CallbackQuery, state: FSMContext):
-    if callback.from_user.username != ADMIN_USER_ID:
+    if str(callback.from_user.id) != str(ADMIN_USER_ID) and callback.from_user.username != ADMIN_USER_ID:
         await callback.answer("You don't have permission.", show_alert=True)
         return
     
@@ -286,7 +286,7 @@ async def start_broadcast(callback: types.CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("broadcast:"))
 async def handle_broadcast_confirm(callback: types.CallbackQuery, state: FSMContext):
-    if callback.from_user.username != ADMIN_USER_ID:
+    if str(callback.from_user.id) != str(ADMIN_USER_ID) and callback.from_user.username != ADMIN_USER_ID:
         await callback.answer("You don't have permission.", show_alert=True)
         return
     
@@ -368,7 +368,7 @@ async def handle_broadcast_confirm(callback: types.CallbackQuery, state: FSMCont
 
 @router.callback_query(F.data.startswith("admin:"))
 async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext):
-    if callback.from_user.username != ADMIN_USER_ID:
+    if str(callback.from_user.id) != str(ADMIN_USER_ID) and callback.from_user.username != ADMIN_USER_ID:
         await callback.answer("You don't have permission to use these controls.", show_alert=True)
         return
 
@@ -736,7 +736,7 @@ async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext
 # ... (остальной код handle_document и handle_whitelist_add без изменений)
 @router.message(F.document.file_name == "cookies.txt")
 async def handle_document(message: types.Message):
-    if message.from_user.username != ADMIN_USER_ID:
+    if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
         return
 
     if message.document.file_name == "cookies.txt":
@@ -769,7 +769,7 @@ async def handle_document(message: types.Message):
 
 @router.callback_query(F.data.startswith("cookie:"))
 async def handle_cookie_callback(callback: types.CallbackQuery):
-    if callback.from_user.username != ADMIN_USER_ID:
+    if str(callback.from_user.id) != str(ADMIN_USER_ID) and callback.from_user.username != ADMIN_USER_ID:
         await callback.answer("You don't have permission.", show_alert=True)
         return
         
@@ -808,7 +808,7 @@ async def handle_cookie_callback(callback: types.CallbackQuery):
 
 @router.message(lambda message: message.text and message.text.lower().startswith("add @"))
 async def handle_whitelist_add(message: types.Message):
-    if message.from_user.username != ADMIN_USER_ID:
+    if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
         await message.answer("You don't have permission to manage the whitelist.")
         return
 
@@ -820,7 +820,7 @@ async def handle_whitelist_add(message: types.Message):
 
 @router.message(Command("cancel"))
 async def cancel_broadcast(message: types.Message, state: FSMContext):
-    if message.from_user.username != ADMIN_USER_ID:
+    if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
         return
     
     current_state = await state.get_state()
@@ -832,7 +832,7 @@ async def cancel_broadcast(message: types.Message, state: FSMContext):
 
 @router.message(BroadcastStates.waiting_for_message)
 async def process_broadcast(message: types.Message, state: FSMContext):
-    if message.from_user.username != ADMIN_USER_ID:
+    if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
         return
     
     # Get all unique user IDs who have downloaded
@@ -885,7 +885,7 @@ async def process_broadcast(message: types.Message, state: FSMContext):
 
 @router.message(DeleteHistoryStates.waiting_for_id)
 async def process_history_delete(message: types.Message, state: FSMContext):
-    if message.from_user.username != ADMIN_USER_ID:
+    if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
         return
     
     id_text = message.text.strip()
