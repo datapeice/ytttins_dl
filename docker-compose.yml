@@ -49,6 +49,8 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
+      home-proxy:
+        condition: service_started
     logging:
       driver: "json-file"
       options:
@@ -112,6 +114,25 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - bot_network
+
+  home-proxy:
+    image: qmcgaw/gluetun
+    container_name: home-proxy
+    restart: always
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./wg_home.conf:/etc/wireguard/wg0.conf:ro,Z
+    environment:
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      - SHADOWSOCKS=on
+      - SHADOWSOCKS_PORT=1080
+      - HTTPPROXY=on
     networks:
       - bot_network
 
