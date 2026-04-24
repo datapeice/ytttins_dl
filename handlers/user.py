@@ -148,8 +148,14 @@ async def cmd_start(message: types.Message, bot: Bot):
                         )
                     except Exception:
                         pass
-            elif result.get('error') == 'not_new_user':
-                await message.answer("ℹ️ Referral link ignored: You are already an active user of this bot!")
+            else:
+                error = result.get('error')
+                if error == 'not_new_user':
+                    await message.answer("ℹ️ Referral link ignored: You are already an active user of this bot!")
+                elif error == 'self_referral':
+                    await message.answer("ℹ️ You cannot refer yourself!")
+                elif error == 'already_referred':
+                    await message.answer("ℹ️ You have already been referred by someone else!")
         except (ValueError, Exception) as e:
             logging.debug(f"[REFERRAL] Invalid ref link: {args[1]} — {e}")
     
@@ -160,10 +166,10 @@ async def cmd_start(message: types.Message, bot: Bot):
         f"Download torrent files by sending the .torrent file or magnet link.\n\n"
         f"👥 <b>Group Chats:</b>\n"
         f"Add me to your group to download media together with friends!\n\n"
-        f"🔍 <b>Inline Mode:</b>\n"
-        f"Use me in <i>any</i> chat: <code>@{me.username} &lt;link&gt;</code>\n\n"
         f"👫 <b>Invite friends:</b> /referral\n"
-        f"⭐️ <b>Support development:</b> /donate"
+        f"⭐️ <b>Support development:</b> /donate\n\n"
+        f"🔍 <b>Inline Mode:</b>\n"
+        f"Use me in <i>any</i> chat: <code>@{me.username} &lt;link&gt;</code>"
     )
     
     kb_builder = InlineKeyboardBuilder()
@@ -199,10 +205,14 @@ async def cmd_referral(message: types.Message, bot: Bot):
         "Share your link with friends to earn free Premium access! 🌟"
     )
     
+    import urllib.parse
+    share_text = f"Join me on this awesome media downloader bot! 🎬\n\n@{me.username}"
+    share_url = f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote(share_text)}"
+
     kb = InlineKeyboardBuilder()
     kb.add(InlineKeyboardButton(
         text="📤 Share referral link", 
-        switch_inline_query=f"Join me on this awesome media downloader bot! 🎬\n{ref_link}"
+        url=share_url
     ))
     
     await message.answer(text, parse_mode='HTML', reply_markup=kb.as_markup())

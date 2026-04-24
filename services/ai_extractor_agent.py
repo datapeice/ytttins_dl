@@ -591,9 +591,17 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
 
                 verify_error = _verify_generated_extractor(url, verify_opts)
                 if verify_error:
-                    # Extract just the last meaningful error line for admin report
+                    # Extract a meaningful error line (look for ERROR: or the last non-empty line)
                     error_lines = verify_error.strip().splitlines()
-                    short_error = error_lines[-1] if error_lines else verify_error
+                    short_error = verify_error
+                    for line in reversed(error_lines):
+                        if "ERROR:" in line:
+                            short_error = line.strip()
+                            break
+                        if line.strip():
+                            short_error = line.strip()
+                            break
+                    
                     log_report(f"⚠️ Step {attempt+1} verification failed: {short_error}", system_only_extra=verify_error)
                     if attempt == 0:
                         if module_path.exists():
