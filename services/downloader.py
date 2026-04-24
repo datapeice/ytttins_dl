@@ -31,7 +31,7 @@ USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0',
 ]
 
-MAX_HTTP_ACCESS_DENIED_RETRIES = 4
+MAX_HTTP_ACCESS_DENIED_RETRIES = len(USER_AGENTS)
 HTTP_RETRY_DELAY_SECONDS = 1.5
 
 def generate_video_thumbnail(video_path: Path, output_path: Path) -> bool:
@@ -294,7 +294,8 @@ def _is_http_access_denied_error(message: str) -> bool:
     ))
 
 def is_youtube_music(url: str) -> bool:
-    return "music.youtube.com" in url
+    parsed_host = (urlparse(url).hostname or "").lower()
+    return parsed_host == "music.youtube.com"
 
 def is_playlist(url: str) -> bool:
     """Detect if the URL is a playlist or album."""
@@ -311,7 +312,8 @@ def is_playlist(url: str) -> bool:
             return True
             
     # YouTube Music albums (often playlists)
-    if url_lower.startswith("https://music.youtube.com/") and "browse/vlpl" in url_lower:
+    playlist_host = (urlparse(url).hostname or "").lower()
+    if playlist_host == "music.youtube.com" and "browse/VLPL" in url:
         return True
     return False
 
@@ -1405,10 +1407,9 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     
     except Exception as e:
         err_text = str(e)
-        max_http_retries = MAX_HTTP_ACCESS_DENIED_RETRIES
-        if _is_http_access_denied_error(err_text) and attempt < max_http_retries:
+        if _is_http_access_denied_error(err_text) and attempt < MAX_HTTP_ACCESS_DENIED_RETRIES:
             logging.warning(
-                f"⚠️ Access-denied response on attempt {attempt}/{max_http_retries}. "
+                f"⚠️ Access-denied response on attempt {attempt}/{MAX_HTTP_ACCESS_DENIED_RETRIES}. "
                 f"Retrying with an alternate browser fingerprint..."
             )
             await asyncio.sleep(HTTP_RETRY_DELAY_SECONDS)
