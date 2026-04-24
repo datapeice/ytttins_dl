@@ -717,6 +717,8 @@ def _download_generic_stream(url: str, proxy_url: Optional[str] = None) -> Optio
         
         # Try direct first, then proxy fallback
         html = None
+        working_proxies = None  # Track what worked
+        working_headers = headers
         for attempt_proxies in [None, proxies]:
             if attempt_proxies is None:
                 logging.info("[GENERIC-STREAM] Trying direct fetch (no proxy)...")
@@ -726,6 +728,7 @@ def _download_generic_stream(url: str, proxy_url: Optional[str] = None) -> Optio
                 resp = requests.get(url, headers=headers, proxies=attempt_proxies, timeout=15, allow_redirects=True)
                 if resp.status_code == 200:
                     html = resp.text
+                    working_proxies = attempt_proxies
                     break
                 # If 403, also try with simple curl-like headers (bypasses some Cloudflare rules)
                 if resp.status_code == 403:
@@ -733,6 +736,8 @@ def _download_generic_stream(url: str, proxy_url: Optional[str] = None) -> Optio
                     resp2 = requests.get(url, headers=simple_headers, proxies=attempt_proxies, timeout=15, allow_redirects=True)
                     if resp2.status_code == 200:
                         html = resp2.text
+                        working_proxies = attempt_proxies
+                        working_headers = simple_headers
                         break
             except Exception as fetch_err:
                 logging.debug(f"[GENERIC-STREAM] Fetch attempt failed: {fetch_err}")
@@ -828,9 +833,10 @@ def _download_generic_stream(url: str, proxy_url: Optional[str] = None) -> Optio
                 return output_path
             return None
 
-        # Direct MP4 Download
-        logging.info(f"[GENERIC-STREAM] Downloading binary stream...")
-        vr = requests.get(video_url, headers=headers, proxies=proxies, stream=True, timeout=300)
+        # Direct MP4 Download (use same connection method that worked for HTML)
+        logging.info(f"[GENERIC-STREAM] Downloading binary stream (proxied={working_proxies is not None})...")
+        dl_headers = {**working_headers, 'Referer': url}
+        vr = requests.get(video_url, headers=dl_headers, proxies=working_proxies, stream=True, timeout=300)
         if vr.status_code == 200:
             with open(output_path, 'wb') as f:
                 for chunk in vr.iter_content(65536):
