@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import logging
 import re
 import ast
@@ -95,7 +96,7 @@ def _fetch_html_snippet(url: str, proxy: Optional[str] = None) -> str:
         resp = requests.get(url, headers=headers, timeout=10, proxies={"http": None, "https": None})
         if resp.status_code == 200:
             logging.info("[AI-EXTRACTOR] HTML fetched via simple curl-like request.")
-            return resp.text[:15000]
+            return resp.text[:5000] + "\n...[TRUNCATED]...\n" + resp.text[-5000:] if len(resp.text) > 10000 else resp.text
     except Exception as e:
         logging.debug(f"[AI-EXTRACTOR] Simple fetch failed: {e}")
 
@@ -105,7 +106,7 @@ def _fetch_html_snippet(url: str, proxy: Optional[str] = None) -> str:
         resp = curl_requests.get(url, impersonate="chrome110", timeout=15, verify=False)
         if resp.status_code == 200:
             logging.info("[AI-EXTRACTOR] HTML fetched via curl_cffi (chrome110).")
-            return resp.text[:15000]
+            return resp.text[:5000] + "\n...[TRUNCATED]...\n" + resp.text[-5000:] if len(resp.text) > 10000 else resp.text
     except Exception as e:
         logging.debug(f"[AI-EXTRACTOR] Browser fetch failed: {e}")
 
@@ -117,7 +118,7 @@ def _fetch_html_snippet(url: str, proxy: Optional[str] = None) -> str:
             resp = curl_requests.get(url, impersonate="chrome110", timeout=20, verify=False, proxies=proxies)
             if resp.status_code == 200:
                 logging.info("[AI-EXTRACTOR] HTML fetched via Proxy + curl_cffi.")
-                return resp.text[:15000]
+                return resp.text[:5000] + "\n...[TRUNCATED]...\n" + resp.text[-5000:] if len(resp.text) > 10000 else resp.text
         except Exception as e:
             logging.warning(f"[AI-EXTRACTOR] All HTML fetch attempts failed, including proxy: {e}")
 
@@ -497,117 +498,119 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
         {"role": "user", "content": user_prompt},
     ]
 
-    # No native tools array needed anymore, we do it via prompt
-    tools = None
+    try:
+        for attempt in range(4):  # Steps allowed (e.g. search + search + fix)
+            if attempt > 0:
+                time.sleep(5)  # Backoff to avoid Groq 429
+            try:
+                payload_json = {
+                    "model": GROQ_MODEL,
+                    "temperature": 0.1,
+                    "messages": messages,
+                    "response_format": {"type": "json_object"},
+                    "stream": False,
+                }
 
-    for attempt in range(4):  # Steps allowed (e.g. search + search + fix)
-        if attempt > 0:
-            time.sleep(5)  # Backoff to avoid Groq 429
-        try:
-            payload_json = {
-                "model": GROQ_MODEL,
-                "temperature": 0.1,
-                "messages": messages,
-                "response_format": {"type": "json_object"},
-                "stream": False,
-            }
-
-            response = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json=payload_json,
-                timeout=GROQ_API_TIMEOUT_SECONDS,
-                proxies={"http": None, "https": None},
-            )
-            response.raise_for_status()
-            body = response.json()
-            
-            content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
-            if not content:
-                raise ValueError("Empty response from Groq")
-            
-            # Log FULL response to system logs, but only a summary to TG
-            log_report(f"Agent step {attempt+1} received. (Size: {len(content)} chars)", system_only_extra=f"--- FULL RESPONSE ---\n{content}")
-            payload = json.loads(_clean_json_response(content), strict=False)
-            
-            # Manual tool handling
-            if payload.get("action") == "web_search":
-                query = payload.get("query")
-                log_report(f"🔍 AI requesting search: {query}")
-                search_res = _web_search(query)
-                messages.append({"role": "assistant", "content": content})
-                messages.append({"role": "user", "content": f"SEARCH RESULTS:\n{search_res}\n\nPlease proceed to write the extractor or perform another search if needed."})
-                continue
-
-            validation_error = _validate_agent_payload(payload)
-            if validation_error:
-                log_report(f"⚠️ Attempt {attempt+1} validation failed: {validation_error}")
-                if attempt == 0:
+                response = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {GROQ_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload_json,
+                    timeout=GROQ_API_TIMEOUT_SECONDS,
+                    proxies={"http": None, "https": None},
+                )
+                response.raise_for_status()
+                body = response.json()
+                
+                content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if not content:
+                    raise ValueError("Empty response from Groq")
+                
+                # Log FULL response to system logs, but only a summary to TG
+                log_report(f"Agent step {attempt+1} received. (Size: {len(content)} chars)", system_only_extra=f"--- FULL RESPONSE ---\n{content}")
+                payload = json.loads(_clean_json_response(content), strict=False)
+                
+                # Manual tool handling
+                if payload.get("action") == "web_search":
+                    query = payload.get("query")
+                    log_report(f"🔍 AI requesting search: {query}")
+                    search_res = _web_search(query)
                     messages.append({"role": "assistant", "content": content})
-                    messages.append({"role": "user", "content": f"Validation failed: {validation_error}. Please correct the JSON structure or logic."})
+                    messages.append({"role": "user", "content": f"SEARCH RESULTS:\n{search_res}\n\nPlease proceed to write the extractor or perform another search if needed."})
                     continue
+
+                validation_error = _validate_agent_payload(payload)
+                if validation_error:
+                    log_report(f"⚠️ Attempt {attempt+1} validation failed: {validation_error}")
+                    if attempt == 0:
+                        messages.append({"role": "assistant", "content": content})
+                        messages.append({"role": "user", "content": f"Validation failed: {validation_error}. Please correct the JSON structure or logic."})
+                        continue
+                    return {"attempted": True, "success": False, "reason": validation_error, "payload": payload}
+
+                if payload.get("action") == "cannot_fix":
+                    note = payload.get("notes") or "cannot_fix"
+                    log_report(f"⚠️ AI cannot fix this URL: {note}")
+                    return {"attempted": True, "success": False, "reason": note, "payload": payload}
+
+                filename = payload["filename"]
+                code = payload["code"]
+                module_path = PLUGIN_EXTRACTOR_DIR / filename
+                
+                # Telegram: only AI explanation (notes). System Logs: FULL CODE.
+                notes = payload.get("notes", "No notes provided")
+                log_report(f"🛠️ Agent suggestion for {filename}:\nExplanation: {notes}", system_only_extra=f"--- FULL GENERATED CODE ---\n{code}")
+                
+                module_path.write_text(code, encoding="utf-8")
+
+                verify_error = _verify_generated_extractor(url, verify_opts)
+                if verify_error:
+                    log_report(f"⚠️ Step {attempt+1} verification failed: {verify_error}")
+                    if attempt == 0:
+                        if module_path.exists():
+                            module_path.unlink()
+                        messages.append({"role": "assistant", "content": content})
+                        messages.append({"role": "user", "content": f"Verification failed with current code: {verify_error}. Please fix the issue and try again."})
+                        continue
+                    try:
+                        if module_path.exists():
+                            module_path.unlink()
+                    except Exception:
+                        pass
+                    return {"attempted": True, "success": False, "reason": verify_error, "payload": payload}
+
+                # Success!
+                pr_result = _create_persistence_pull_request(filename, code, url)
+                status_pr = f"PR: {pr_result.get('url')}" if pr_result.get('created') else f"PR status: not created ({pr_result.get('reason')})"
+                log_report(f"✅ AI autofix SUCCESS for {url}\nModule: {filename}\n{status_pr}")
+                return {
+                    "attempted": True,
+                    "success": True,
+                    "filename": filename,
+                    "module_path": str(module_path),
+                    "pr": pr_result,
+                    "payload": payload,
+                }
+
+            except Exception as e:
+                log_report(f"❌ Critical agent error at step {attempt+1}: {e}")
+                messages.append({"role": "user", "content": f"An error occurred: {e}. Please correct and try again."})
+                if "429" in str(e):
+                    time.sleep(5)
+                if attempt >= 3:
+                    return {"attempted": True, "success": False, "reason": f"agent_error: {e}"}
+
+        return {"attempted": True, "success": False, "reason": "max_retries_exceeded_or_final_failure"}
+    
+    finally:
+        # Guarantee admin notification even if the loop or code crashes
+        if report_logs:
+            try:
                 _notify_admin("\n".join(report_logs))
-                return {"attempted": True, "success": False, "reason": validation_error, "payload": payload}
-
-            if payload.get("action") == "cannot_fix":
-                note = payload.get("notes") or "cannot_fix"
-                log_report(f"⚠️ AI cannot fix this URL: {note}")
-                _notify_admin("\n".join(report_logs))
-                return {"attempted": True, "success": False, "reason": note, "payload": payload}
-
-            filename = payload["filename"]
-            code = payload["code"]
-            module_path = PLUGIN_EXTRACTOR_DIR / filename
-            
-            # Telegram: only AI explanation (notes). System Logs: FULL CODE.
-            notes = payload.get("notes", "No notes provided")
-            log_report(f"🛠️ Agent suggestion for {filename}:\nExplanation: {notes}", system_only_extra=f"--- FULL GENERATED CODE ---\n{code}")
-            
-            module_path.write_text(code, encoding="utf-8")
-
-            verify_error = _verify_generated_extractor(url, verify_opts)
-            if verify_error:
-                log_report(f"⚠️ Step {attempt+1} verification failed: {verify_error}")
-                if attempt == 0:
-                    if module_path.exists():
-                        module_path.unlink()
-                    messages.append({"role": "assistant", "content": content})
-                    messages.append({"role": "user", "content": f"Verification failed with current code: {verify_error}. Please fix the issue and try again."})
-                    continue
-                try:
-                    if module_path.exists():
-                        module_path.unlink()
-                except Exception:
-                    pass
-                _notify_admin("\n".join(report_logs))
-                return {"attempted": True, "success": False, "reason": verify_error, "payload": payload}
-
-            # Success!
-            pr_result = _create_persistence_pull_request(filename, code, url)
-            status_pr = f"PR: {pr_result.get('url')}" if pr_result.get('created') else f"PR status: not created ({pr_result.get('reason')})"
-            log_report(f"✅ AI autofix SUCCESS for {url}\nModule: {filename}\n{status_pr}")
-            _notify_admin("\n".join(report_logs))
-            return {
-                "attempted": True,
-                "success": True,
-                "filename": filename,
-                "module_path": str(module_path),
-                "pr": pr_result,
-                "payload": payload,
-            }
-
-        except Exception as e:
-            log_report(f"❌ Error on step {attempt+1}: {e}")
-            if attempt >= 3:
-                _notify_admin("\n".join(report_logs))
-                return {"attempted": True, "success": False, "reason": f"groq_call_failed: {e}"}
-            messages.append({"role": "user", "content": f"An error occurred: {e}. Please correct your output and try again."})
-
-    _notify_admin("\n".join(report_logs))
-    return {"attempted": True, "success": False, "reason": "max_retries_exceeded"}
+            except Exception as nae:
+                logging.error(f"[AI-AUTOFIX] Failed to notify admin: {nae}")
 
 
 def _notify_admin(report: str):
