@@ -1,8 +1,10 @@
 import json
 import logging
 import re
+import ast
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, List
+from urllib.parse import urlparse
 
 import requests
 import yt_dlp
@@ -13,9 +15,11 @@ from config import DATA_DIR, AI_AUTOFIX_ENABLED, GROQ_API_KEY, GROQ_MODEL, BOT_T
 AUTO_PLUGIN_ROOT = DATA_DIR / "auto_plugin_dirs"
 PLUGIN_PACKAGE_DIR = AUTO_PLUGIN_ROOT / "yt_dlp_plugins"
 PLUGIN_EXTRACTOR_DIR = PLUGIN_PACKAGE_DIR / "extractor"
+MIN_EXTRACTOR_CODE_LENGTH = 200
+GROQ_API_TIMEOUT_SECONDS = 80
 
 
-def get_plugin_dirs() -> list[str]:
+def get_plugin_dirs() -> List[str]:
     _ensure_plugin_layout()
     return [str(AUTO_PLUGIN_ROOT)]
 
@@ -62,10 +66,27 @@ def _fetch_html_snippet(url: str) -> str:
         resp = requests.get(
             url,
             timeout=15,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; ytttins-ai-autofix/1.0)"},
+            verify=True,
+            stream=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; yttins-ai-autofix/1.0)"},
         )
-        if resp.ok:
-            return (resp.text or "")[:5000]
+        if not resp.ok:
+            return ""
+        content_len = int(resp.headers.get("Content-Length", "0") or 0)
+        if content_len > 2 * 1024 * 1024:
+            return ""
+
+        chunks = []
+        total = 0
+        for chunk in resp.iter_content(chunk_size=4096):
+            if not chunk:
+                continue
+            text_chunk = chunk.decode(resp.encoding or "utf-8", errors="ignore")
+            chunks.append(text_chunk)
+            total += len(text_chunk)
+            if total >= 5000:
+                break
+        return "".join(chunks)[:5000]
     except Exception as e:
         logging.warning(f"[AI-AUTOFIX] Could not fetch HTML snippet: {e}")
     return ""
@@ -100,35 +121,66 @@ def _validate_agent_payload(payload: Dict) -> Optional[str]:
     code = payload.get("code") or ""
     if not re.fullmatch(r"[A-Za-z0-9_]+\.py", filename):
         return "invalid filename"
-    if not isinstance(code, str) or len(code.strip()) < 200:
+    if Path(filename).name != filename:
+        return "invalid filename path"
+    if not isinstance(code, str) or len(code.strip()) < MIN_EXTRACTOR_CODE_LENGTH:
         return "empty code"
 
     required = ("InfoExtractor", "_VALID_URL", "def _real_extract", "_TESTS")
     if not all(token in code for token in required):
         return "missing extractor primitives"
 
-    forbidden = ("subprocess", "os.system", "eval(", "exec(", "socket.")
-    if any(token in code for token in forbidden):
-        return "unsafe code pattern detected"
-
     try:
-        compile(code, filename, "exec")
+        tree = ast.parse(code, filename=filename)
     except Exception as e:
         return f"extractor code does not compile: {e}"
+
+    dangerous_modules = {"os", "subprocess", "importlib", "socket"}
+    dangerous_calls = {"eval", "exec", "__import__"}
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] in dangerous_modules:
+                    return f"unsafe import: {alias.name}"
+        elif isinstance(node, ast.ImportFrom):
+            if (node.module or "").split(".")[0] in dangerous_modules:
+                return f"unsafe from-import: {node.module}"
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in dangerous_calls:
+                return f"unsafe call: {node.func.id}"
+            if isinstance(node.func, ast.Attribute):
+                if isinstance(node.func.value, ast.Name):
+                    if node.func.value.id == "os" and node.func.attr == "system":
+                        return "unsafe call: os.system"
+                    if node.func.value.id == "subprocess":
+                        return "unsafe call: subprocess"
+            if isinstance(node.func, ast.Name) and node.func.id == "open":
+                if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+                    mode = str(node.args[1].value).lower()
+                    if any(flag in mode for flag in ("w", "a", "x", "+")):
+                        return "unsafe file-write open()"
+                for kw in node.keywords:
+                    if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                        mode = str(kw.value.value).lower()
+                        if any(flag in mode for flag in ("w", "a", "x", "+")):
+                            return "unsafe file-write open()"
+
     return None
 
 
 def _notify_admin(text: str) -> None:
     if not BOT_TOKEN or not ADMIN_USER_ID:
         return
-    chat_id = str(ADMIN_USER_ID)
-    if not re.fullmatch(r"-?\d+", chat_id):
-        logging.warning("[AI-AUTOFIX] ADMIN_USERNAME is not numeric chat id; admin message skipped")
+    try:
+        chat_id = int(ADMIN_USER_ID)
+    except (TypeError, ValueError):
+        logging.warning("[AI-AUTOFIX] ADMIN_USER_ID is not numeric chat id; admin message skipped")
         return
     try:
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": int(chat_id), "text": text},
+            json={"chat_id": chat_id, "text": text},
             timeout=10,
         )
     except Exception as e:
@@ -143,7 +195,10 @@ def run_ai_extractor_autofix(url: str, error_message: str) -> Dict:
 
     _ensure_plugin_layout()
     html_snippet = _fetch_html_snippet(url)
-    existing_filename = f"{re.sub(r'[^a-z0-9]+', '_', url.split('/')[2].lower()).strip('_')}_ie.py"
+    parsed = urlparse(url)
+    netloc = parsed.netloc.lower()
+    safe_domain = re.sub(r"[^a-z0-9_]+", "_", netloc).strip("_") or "site"
+    existing_filename = f"{safe_domain}_ie.py"
     existing_code = _read_existing_extractor(existing_filename)
     system_prompt = (
         "You are an expert Python developer specializing in yt-dlp extractor architecture. "
@@ -173,10 +228,17 @@ def run_ai_extractor_autofix(url: str, error_message: str) -> Dict:
                     {"role": "user", "content": user_prompt},
                 ],
             },
-            timeout=80,
+            timeout=GROQ_API_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
+        body = response.json()
+        choices = body.get("choices") if isinstance(body, dict) else None
+        if not isinstance(choices, list) or not choices:
+            raise ValueError("Groq response missing choices")
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+            raise ValueError("Groq response missing message content")
+        content = message["content"]
         payload = json.loads(_clean_json_response(content))
     except Exception as e:
         _notify_admin(f"❌ AI extractor autofix failed to call Groq for {url}\nError: {e}")

@@ -1174,7 +1174,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             ai_autofix_attempted = True
             try:
                 if progress_callback:
-                    await wrapped_callback("🤖 AI bot is already fixing this extractor and will retry automatically...")
+                    await wrapped_callback("🤖 AI bot is now attempting to fix this extractor. A retry will follow automatically if successful.")
                 logging.info(f"[AI-AUTOFIX] Attempting Groq-based extractor fix for: {url}")
                 ai_autofix_result = await asyncio.to_thread(run_ai_extractor_autofix, url, str(ytdlp_error))
                 if ai_autofix_result and ai_autofix_result.get("success"):
@@ -1202,8 +1202,8 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             ai_reason = (ai_autofix_result or {}).get("reason", "autofix_not_applied")
             raise Exception(
                 f"All download methods failed. YT-DLP error: {ytdlp_error}\n"
-                f"AI-AUTOFIX-IN-PROGRESS: AI bot already started extractor recovery; "
-                f"retry will happen automatically when fix is ready ({ai_reason})."
+                f"AI-AUTOFIX-ATTEMPTED: AI bot attempted extractor recovery, but this request still failed "
+                f"(reason: {ai_reason})."
             )
 
         raise Exception(f"All download methods failed. YT-DLP error: {ytdlp_error}")
