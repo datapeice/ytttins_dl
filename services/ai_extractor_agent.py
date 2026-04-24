@@ -87,18 +87,14 @@ def should_attempt_ai_autofix(url: str, error_message: str) -> bool:
 
 
 def _fetch_html_snippet(url: str) -> str:
+    """Fetches HTML using curl_cffi to bypass basic protection."""
     try:
-        resp = requests.get(
-            url,
+        from curl_cffi import requests as curl_requests
+        # We try to mimic a real browser to get the best possible snippet
+        resp = curl_requests.get(
+            url, 
+            impersonate="chrome110", 
             timeout=15,
-            verify=True,
-            stream=True,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; yttins-ai-autofix/1.0)"},
-        )
-        if not resp.ok:
-            return ""
-        content_len = int(resp.headers.get("Content-Length") or "0")
-        if content_len > 2 * 1024 * 1024:
             return ""
 
         chunks = []
@@ -461,18 +457,17 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
     system_prompt = (
         "You are an expert autonomous AI agent specializing in yt-dlp extractor architecture.\n"
         "Your task is to write a yt-dlp InfoExtractor plugin.\n\n"
-        "MANDATORY SEARCH PROTOCOL:\n"
-        "1. If you face a 403 Forbidden or the first verification attempt fails, "
-        "   YOU MUST PERFORM A WEB_SEARCH before suggesting any new code.\n"
-        "2. Do NOT guess. Verify everything.\n\n"
-        "JSON STRUCTURE EXAMPLE (STRICT):\n"
+        "OPERATING MODE:\n"
+        "1. FIRST PRIORITY: Analyze the provided HTML snippet (fetched via server-side curl) and write the fix immediately.\n"
+        "2. SECOND PRIORITY: If your first fix fails or you are stuck, use 'web_search' to find site-specific API or logic.\n\n"
+        "JSON STRUCTURE EXAMPLE:\n"
         "{\n"
         "  \"action\": \"new_module\",\n"
         "  \"filename\": \"test_ie.py\",\n"
         "  \"code\": \"import re\\nfrom .common import InfoExtractor\\n...\",\n"
-        "  \"notes\": \"explanation here\"\n"
+        "  \"notes\": \"explanation\"\n"
         "}\n\n"
-        "ALWAYS return VALID JSON. Put the python code inside the \"code\" string value, NOT as a key."
+        "ALWAYS return VALID JSON. Put the python code inside the \"code\" string value."
     )
     user_prompt = json.dumps({
         "url": url,
