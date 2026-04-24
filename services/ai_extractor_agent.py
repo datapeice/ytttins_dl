@@ -3,6 +3,7 @@ import logging
 import re
 import ast
 import socket
+import traceback
 import base64
 from pathlib import Path
 from typing import Dict, Optional, List
@@ -309,12 +310,14 @@ def _verify_generated_extractor(url: str, verify_opts_override: Optional[Dict] =
             info = ydl.extract_info(url, download=False)
         if not _extract_has_stream(info):
             return "verification_failed_no_stream_url (the generated extractor did not return any media links)"
-    except Exception as e:
-        # Include full exception detail for the AI to learn
-        err_detail = f"{type(e).__name__}: {str(e)}"
+    except Exception:
+        # Get full traceback to help the AI understand where it crashed
+        err_detail = traceback.format_exc()
+        logging.warning(f"[AI-VERIFY] Verification failed with traceback:\n{err_detail}")
+        
         if _is_network_resolution_error(err_detail):
-            return f"verification_network_error:{err_detail}"
-        return f"verification_failed_runtime_error:{err_detail}"
+            return f"verification_network_error: {err_detail}"
+        return f"verification_failed_runtime_error_traceback:\n{err_detail}"
     return None
 
 
@@ -442,16 +445,14 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
     
     system_prompt = (
         "You are an expert autonomous AI agent specializing in yt-dlp extractor architecture.\n"
-        "Your task is to write a yt-dlp InfoExtractor plugin that extracts video URLs from protected sites.\n\n"
-        "CRITICAL INSTRUCTIONS:\n"
-        "1. If you see signs of bot protection (Cloudflare, 403 Forbidden) or don't know the site's structure, "
-        "   YOU MUST use the 'web_search' action first! Search for 'python yt-dlp extractor [site name]' or '[site name] video api'.\n"
-        "2. Do NOT guess URLs (like torrent trackers or random IPs). Use logic based on HTML or search results.\n"
-        "3. Your final output must be a Python module with a class inheriting from InfoExtractor.\n\n"
+        "Your task is to write a yt-dlp InfoExtractor plugin.\n\n"
+        "MANDATORY SEARCH PROTOCOL:\n"
+        "1. If you face a 403 Forbidden or the first verification attempt fails, "
+        "   YOU MUST PERFORM A WEB_SEARCH before suggesting any new code. Search for the exact site error or its API.\n"
+        "2. Do NOT guess the site structure. Verify it via search results.\n\n"
         "STEPS:\n"
-        "- To search: {\"action\": \"web_search\", \"query\": \"...\"}\n"
-        "- To provide fix: {\"action\": \"new_module\", \"filename\": \"domain_ie.py\", \"code\": \"...\", \"notes\": \"...\"}\n"
-        "- If impossible: {\"action\": \"cannot_fix\", \"notes\": \"...\"}\n\n"
+        "- Search: {\"action\": \"web_search\", \"query\": \"...\"}\n"
+        "- Fix: {\"action\": \"new_module\", \"filename\": \"domain_ie.py\", \"code\": \"...\", \"notes\": \"...\"}\n"
         "ALWAYS return VALID JSON."
     )
     user_prompt = json.dumps({
