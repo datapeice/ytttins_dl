@@ -200,7 +200,7 @@ def _validate_agent_payload(payload: Dict) -> Optional[str]:
     if not isinstance(code, str) or len(code.strip()) < MIN_EXTRACTOR_CODE_LENGTH:
         return "empty code"
 
-    required = ("InfoExtractor", "_VALID_URL", "def _real_extract", "_TESTS")
+    required = ("InfoExtractor", "_VALID_URL", "def _real_extract", "_TEST")
     if not all(token in code for token in required):
         return "missing extractor primitives"
 

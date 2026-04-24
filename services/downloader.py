@@ -1242,7 +1242,7 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
             'quiet': False,
             'verbose': True,
             'legacy_server_connect': True,
-            'socket_timeout': 60,
+            'socket_timeout': 15,
             'retries': 5,
             'fragment_retries': 5,
             'low_speed_limit': 0,
