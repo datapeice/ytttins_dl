@@ -16,6 +16,7 @@ from config import DOWNLOADS_DIR, DATA_DIR, COOKIES_CONTENT, USE_COBALT, COBALT_
 from database.storage import stats
 from database.models import Cookie
 from services.tiktok_scraper import download_tiktok_images, fetch_tiktok_metadata
+from services.ai_extractor_agent import get_plugin_dirs, run_ai_extractor_autofix, should_attempt_ai_autofix
 
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -151,6 +152,8 @@ def build_impersonate_target(value: str):
         return ImpersonateTarget(value)
     except Exception:
         return value
+
+cobalt_client = None
 
 # Import CobaltClient only if USE_COBALT is enabled
 if USE_COBALT and COBALT_API_URL:
@@ -1164,13 +1167,45 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             except Exception as gen_err:
                 logging.error(f"[GENERIC-STREAM] ❌ Failed: {gen_err}")
 
+        ai_autofix_attempted = False
+        ai_autofix_result = None
+
+        if should_attempt_ai_autofix(url, str(ytdlp_error)):
+            ai_autofix_attempted = True
+            try:
+                if progress_callback:
+                    await wrapped_callback("🤖 AI bot is already fixing this extractor and will retry automatically...")
+                logging.info(f"[AI-AUTOFIX] Attempting Groq-based extractor fix for: {url}")
+                ai_autofix_result = await asyncio.to_thread(run_ai_extractor_autofix, url, str(ytdlp_error))
+                if ai_autofix_result and ai_autofix_result.get("success"):
+                    if progress_callback:
+                        await wrapped_callback("🤖 Extractor patch applied. Retrying download...")
+                    logging.info(f"[AI-AUTOFIX] ✅ Module applied: {ai_autofix_result.get('filename')}")
+                    return await _download_local_ytdlp(
+                        url,
+                        is_music,
+                        video_height=video_height,
+                        min_duration=min_duration,
+                        progress_callback=wrapped_callback if progress_callback else None,
+                    )
+            except Exception as ai_err:
+                logging.error(f"[AI-AUTOFIX] ❌ Unexpected failure: {ai_err}")
+
         # Все методы провалились
         error_msg = str(ytdlp_error) if ytdlp_error else "Unknown error"
         if "blocked in your area" in error_msg or "Viewing restrictions" in error_msg:
             raise Exception(f"Video is blocked in the server's region. Try using a proxy or a different link. (Error: {error_msg})")
         elif "login required" in error_msg.lower() and platform == "instagram":
             raise Exception("Instagram requires new cookies. Please contact the administrator to update cookies.txt.")
-        
+
+        if ai_autofix_attempted:
+            ai_reason = (ai_autofix_result or {}).get("reason", "autofix_not_applied")
+            raise Exception(
+                f"All download methods failed. YT-DLP error: {ytdlp_error}\n"
+                f"AI-AUTOFIX-IN-PROGRESS: AI bot already started extractor recovery; "
+                f"retry will happen automatically when fix is ready ({ai_reason})."
+            )
+
         raise Exception(f"All download methods failed. YT-DLP error: {ytdlp_error}")
     finally:
         if status_task:
@@ -1222,6 +1257,7 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                 'node': {'path': '/usr/local/bin/node'}
             },
             'remote_components': ['ejs:github'],
+            'plugin_dirs': get_plugin_dirs(),
             'postprocessor_args': {
                 'ffmpeg': ['-movflags', '+faststart']
             },
@@ -1391,6 +1427,7 @@ async def _download_local_tiktok(url: str, use_proxy: bool = False, progress_cal
                 'app_version': [''],
             }
         },
+        'plugin_dirs': get_plugin_dirs(),
         'fixup': 'detect_or_warn',
         'postprocessor_args': {
             'ffmpeg': ['-movflags', '+faststart']

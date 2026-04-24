@@ -1102,6 +1102,12 @@ async def handle_url(message: types.Message, bot: Bot):
             user_error = "❌ This video is private or requires login."
         elif "Sign in to confirm" in error_msg:
             user_error = "⚠️ YouTube requires authentication (cookies). Please contact the bot admin."
+        elif "AI-AUTOFIX-IN-PROGRESS" in error_msg:
+            user_error = (
+                "🤖 AI bot is already fixing this extractor.\n"
+                "When patching completes, the bot will retry downloading automatically.\n\n"
+                f"```error\n{error_msg}\n```"
+            )
         else:
             user_error = (
                 f"```error\n{error_msg}\n```\n\n"
