@@ -1176,7 +1176,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 if progress_callback:
                     await wrapped_callback("🤖 AI bot is autonomously applying extractor patches now. A retry will follow automatically if successful.")
                 logging.info(f"[AI-AUTOFIX] Attempting Groq-based extractor fix for: {url}")
-                ai_autofix_result = await asyncio.to_thread(run_ai_extractor_autofix, url, str(ytdlp_error))
+                ai_autofix_result = await asyncio.to_thread(run_ai_extractor_autofix, url, str(ytdlp_error), ydl_opts)
                 if ai_autofix_result and ai_autofix_result.get("success"):
                     if progress_callback:
                         await wrapped_callback("🤖 Autonomous extractor patch applied. Retrying download...")

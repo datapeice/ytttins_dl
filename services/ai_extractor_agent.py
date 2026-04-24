@@ -11,6 +11,10 @@ from datetime import datetime, timezone
 
 import requests
 import yt_dlp
+try:
+    from duckduckgo_search import DDGS
+except ImportError:
+    DDGS = None
 
 from config import (
     DATA_DIR,
@@ -280,7 +284,7 @@ def _extract_has_stream(info: Dict) -> bool:
     return False
 
 
-def _verify_generated_extractor(url: str) -> Optional[str]:
+def _verify_generated_extractor(url: str, verify_opts_override: Optional[Dict] = None) -> Optional[str]:
     verify_opts = {
         "skip_download": True,
         "noplaylist": False,
@@ -288,6 +292,11 @@ def _verify_generated_extractor(url: str) -> Optional[str]:
         "no_warnings": True,
         "plugin_dirs": get_plugin_dirs(),
     }
+    if verify_opts_override:
+        verify_opts.update(verify_opts_override)
+        verify_opts["skip_download"] = True
+        verify_opts["extract_flat"] = False
+
     try:
         with yt_dlp.YoutubeDL(verify_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -380,7 +389,18 @@ def _create_persistence_pull_request(filename: str, code: str, source_url: str) 
         return {"created": False, "reason": str(e)}
 
 
-def run_ai_extractor_autofix(url: str, error_message: str) -> Dict:
+def _web_search(query: str) -> str:
+    if not DDGS:
+        return "Search tool not available (duckduckgo-search not installed)."
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=5))
+            return json.dumps(results, ensure_ascii=False)
+    except Exception as e:
+        return f"Search failed: {e}"
+
+
+def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional[Dict] = None) -> Dict:
     if not AI_AUTOFIX_ENABLED:
         return {"attempted": False, "reason": "disabled"}
     if not GROQ_API_KEY:
@@ -426,101 +446,133 @@ def run_ai_extractor_autofix(url: str, error_message: str) -> Dict:
         "html_snippet": html_snippet,
     }, ensure_ascii=False)
 
-    try:
-        response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json",
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the web for information about a website, its API, or how to extract videos from it.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "The search query."}
+                    },
+                    "required": ["query"],
+                },
             },
-            json={
-                "model": GROQ_MODEL,
-                "temperature": 0.2,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            },
-            timeout=GROQ_API_TIMEOUT_SECONDS,
-            proxies={"http": None, "https": None},
-        )
-        response.raise_for_status()
-        try:
-            body = response.json()
-        except json.JSONDecodeError:
-            body = json.loads(response.text, strict=False)
-        choices = body.get("choices") if isinstance(body, dict) else None
-        if not isinstance(choices, list) or not choices:
-            raise ValueError("Groq response missing choices")
-        message = choices[0].get("message") if isinstance(choices[0], dict) else None
-        if not isinstance(message, dict) or not isinstance(message.get("content"), str):
-            raise ValueError("Groq response missing message content")
-        content = message["content"]
-        logging.info(f"[AI-AUTOFIX] Agent replied with content length {len(content)}.\n--- AGENT RESPONSE START ---\n{content}\n--- AGENT RESPONSE END ---")
-        payload = json.loads(_clean_json_response(content), strict=False)
-    except requests.exceptions.HTTPError as e:
-        err_msg = f"HTTP Error {e.response.status_code}: {e.response.text}"
-        _notify_admin(f"❌ AI extractor autofix failed to call Groq for {url}\nError: {err_msg}")
-        return {"attempted": True, "success": False, "reason": f"groq_call_failed: {err_msg}"}
-    except Exception as e:
-        _notify_admin(f"❌ AI extractor autofix failed to call Groq for {url}\nError: {e}")
-        return {"attempted": True, "success": False, "reason": f"groq_call_failed: {e}"}
-
-    validation_error = _validate_agent_payload(payload)
-    if validation_error:
-        _notify_admin(f"❌ AI extractor autofix rejected output for {url}\nReason: {validation_error}")
-        return {"attempted": True, "success": False, "reason": validation_error, "payload": payload}
-
-    if payload.get("action") == "cannot_fix":
-        note = payload.get("notes") or "cannot_fix"
-        _notify_admin(f"⚠️ AI extractor autofix cannot fix {url}\n{note}")
-        return {"attempted": True, "success": False, "reason": note, "payload": payload}
-
-    filename = payload["filename"]
-    code = payload["code"]
-    module_path = PLUGIN_EXTRACTOR_DIR / filename
-    try:
-        module_path.write_text(code, encoding="utf-8")
-    except Exception as e:
-        _notify_admin(f"❌ AI extractor autofix failed writing module {filename}\nError: {e}")
-        return {"attempted": True, "success": False, "reason": f"write_failed: {e}", "payload": payload}
-
-    verify_error = _verify_generated_extractor(url)
-    if verify_error:
-        try:
-            if module_path.exists():
-                module_path.unlink()
-        except Exception:
-            pass
-        _notify_admin(
-            f"❌ AI extractor autofix generated module {filename}, but mandatory verification failed for {url}\n"
-            f"Reason: {verify_error}"
-        )
-        return {
-            "attempted": True,
-            "success": False,
-            "reason": verify_error,
-            "payload": payload,
-            "filename": filename,
         }
+    ]
 
-    pr_result = _create_persistence_pull_request(filename, code, url)
-    if pr_result.get("created"):
-        _notify_admin(
-            f"✅ AI extractor autofix applied and verified module {filename} for {url}\n"
-            f"PR: {pr_result.get('url')}"
-        )
-    else:
-        _notify_admin(
-            f"✅ AI extractor autofix applied and verified module {filename} for {url}\n"
-            f"PR status: not created ({pr_result.get('reason')})"
-        )
-    return {
-        "attempted": True,
-        "success": True,
-        "filename": filename,
-        "module_path": str(module_path),
-        "pr": pr_result,
-        "payload": payload,
-    }
+    for attempt in range(2):
+        try:
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": GROQ_MODEL,
+                    "temperature": 0.2,
+                    "response_format": {"type": "json_object"},
+                    "messages": messages,
+                    "tools": tools,
+                    "tool_choice": "auto",
+                },
+                timeout=GROQ_API_TIMEOUT_SECONDS,
+                proxies={"http": None, "https": None},
+            )
+            response.raise_for_status()
+            body = response.json()
+            
+            choice = body.get("choices", [{}])[0]
+            message = choice.get("message", {})
+            
+            # Handle tool calls
+            tool_calls = message.get("tool_calls")
+            if tool_calls:
+                messages.append(message)
+                for tool_call in tool_calls:
+                    function_name = tool_call.get("function", {}).get("name")
+                    if function_name == "web_search":
+                        args = json.loads(tool_call.get("function", {}).get("arguments", "{}"))
+                        query = args.get("query")
+                        search_res = _web_search(query)
+                        messages.append({
+                            "tool_call_id": tool_call.get("id"),
+                            "role": "tool",
+                            "name": function_name,
+                            "content": search_res,
+                        })
+                # Call Groq again with search results
+                continue
+
+            content = message.get("content")
+            if not content:
+                raise ValueError("Groq response missing content")
+            
+            logging.info(f"[AI-AUTOFIX] Agent replied (attempt {attempt+1}).\n--- AGENT RESPONSE START ---\n{content}\n--- AGENT RESPONSE END ---")
+            payload = json.loads(_clean_json_response(content), strict=False)
+            
+            validation_error = _validate_agent_payload(payload)
+            if validation_error:
+                if attempt == 0:
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({"role": "user", "content": f"Validation failed: {validation_error}. Please correct the JSON structure or logic."})
+                    continue
+                _notify_admin(f"❌ AI extractor autofix rejected output for {url} after 2 attempts\nReason: {validation_error}")
+                return {"attempted": True, "success": False, "reason": validation_error, "payload": payload}
+
+            if payload.get("action") == "cannot_fix":
+                note = payload.get("notes") or "cannot_fix"
+                _notify_admin(f"⚠️ AI extractor autofix cannot fix {url}\n{note}")
+                return {"attempted": True, "success": False, "reason": note, "payload": payload}
+
+            filename = payload["filename"]
+            code = payload["code"]
+            module_path = PLUGIN_EXTRACTOR_DIR / filename
+            module_path.write_text(code, encoding="utf-8")
+
+            verify_error = _verify_generated_extractor(url, verify_opts)
+            if verify_error:
+                if attempt == 0:
+                    if module_path.exists():
+                        module_path.unlink()
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({"role": "user", "content": f"Verification failed with current code: {verify_error}. Please fix the issue and try again."})
+                    continue
+                try:
+                    if module_path.exists():
+                        module_path.unlink()
+                except Exception:
+                    pass
+                _notify_admin(f"❌ AI extractor autofix failed verification for {url} after 2 attempts\nReason: {verify_error}")
+                return {"attempted": True, "success": False, "reason": verify_error, "payload": payload}
+
+            # Success!
+            pr_result = _create_persistence_pull_request(filename, code, url)
+            _notify_admin(
+                f"✅ AI extractor autofix applied and verified module {filename} for {url}\n"
+                f"{'PR: ' + pr_result.get('url') if pr_result.get('created') else 'PR status: not created (' + str(pr_result.get('reason')) + ')'}"
+            )
+            return {
+                "attempted": True,
+                "success": True,
+                "filename": filename,
+                "module_path": str(module_path),
+                "pr": pr_result,
+                "payload": payload,
+            }
+
+        except Exception as e:
+            _notify_admin(f"❌ AI extractor autofix failed on attempt {attempt+1} for {url}\nError: {e}")
+            if attempt == 1:
+                return {"attempted": True, "success": False, "reason": f"groq_call_failed: {e}"}
+            messages.append({"role": "user", "content": f"An error occurred: {e}. Please try again."})
+
+    return {"attempted": True, "success": False, "reason": "max_retries_exceeded"}
