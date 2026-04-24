@@ -314,7 +314,7 @@ def _extract_has_stream(info: Dict) -> bool:
 
 
 def _verify_generated_extractor(url: str, verify_opts_override: Optional[Dict] = None) -> Optional[str]:
-    verify_opts = {
+    base_opts = {
         "skip_download": True,
         "noplaylist": False,
         "quiet": True,
@@ -322,25 +322,48 @@ def _verify_generated_extractor(url: str, verify_opts_override: Optional[Dict] =
         "plugin_dirs": get_plugin_dirs(),
     }
     if verify_opts_override:
-        verify_opts.update(verify_opts_override)
-        verify_opts["skip_download"] = True
-        verify_opts["extract_flat"] = False
+        base_opts.update(verify_opts_override)
+    base_opts["skip_download"] = True
+    base_opts["extract_flat"] = False
 
+    # Extract proxy for fallback, but try direct first
+    proxy = base_opts.pop("proxy", "") or ""
+
+    # --- Attempt 1: Direct (no proxy) ---
+    direct_opts = {**base_opts, "proxy": ""}
     try:
-        with yt_dlp.YoutubeDL(verify_opts) as ydl:
-            # We must use the same URL that failed originally
+        with yt_dlp.YoutubeDL(direct_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-        if not _extract_has_stream(info):
-            return "verification_failed_no_stream_url (the generated extractor did not return any media links)"
+        if _extract_has_stream(info):
+            return None  # Success!
+        return "verification_failed_no_stream_url (the generated extractor did not return any media links)"
     except Exception:
-        # Get full traceback to help the AI understand where it crashed
-        err_detail = traceback.format_exc()
-        logging.warning(f"[AI-VERIFY] Verification failed with traceback:\n{err_detail}")
-        
-        if _is_network_resolution_error(err_detail):
-            return f"verification_network_error: {err_detail}"
-        return f"verification_failed_runtime_error_traceback:\n{err_detail}"
-    return None
+        direct_err = traceback.format_exc()
+        logging.info(f"[AI-VERIFY] Direct verification failed, will try proxy fallback...")
+
+    # --- Attempt 2: Via proxy (fallback) ---
+    if proxy:
+        logging.info(f"[AI-VERIFY] Retrying verification via proxy...")
+        proxy_opts = {**base_opts, "proxy": proxy}
+        try:
+            with yt_dlp.YoutubeDL(proxy_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            if _extract_has_stream(info):
+                return None  # Success via proxy!
+            return "verification_failed_no_stream_url (proxy attempt also returned no media links)"
+        except Exception:
+            proxy_err = traceback.format_exc()
+            logging.warning(f"[AI-VERIFY] Proxy verification also failed:\n{proxy_err}")
+            # Return the proxy error since it was the last attempt
+            if _is_network_resolution_error(proxy_err):
+                return f"verification_network_error: {proxy_err}"
+            return f"verification_failed_runtime_error_traceback:\n{proxy_err}"
+
+    # No proxy available, return direct error
+    logging.warning(f"[AI-VERIFY] Verification failed (no proxy fallback):\n{direct_err}")
+    if _is_network_resolution_error(direct_err):
+        return f"verification_network_error: {direct_err}"
+    return f"verification_failed_runtime_error_traceback:\n{direct_err}"
 
 
 def _github_request(method: str, path: str, **kwargs):
@@ -613,30 +636,4 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
                 logging.error(f"[AI-AUTOFIX] Failed to notify admin: {nae}")
 
 
-def _notify_admin(report: str):
-    """Sends a summary report to the administrator via Telegram."""
-    chat_id = os.getenv("ADMIN_CHAT_ID")
-    token = os.getenv("BOT_TOKEN")
-    
-    if not (chat_id and token):
-        logging.warning("[AI-AUTOFIX] Admin notification skipped: ADMIN_CHAT_ID or BOT_TOKEN missing.")
-        return
 
-    logging.info(f"[AI-AUTOFIX] Sending summary report to admin ({chat_id})...")
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    
-    # Split message if too long for Telegram (4096 chars)
-    if len(report) > 4000:
-        parts = [report[i:i+4000] for i in range(0, len(report), 4000)]
-    else:
-        parts = [report]
-
-    for part in parts:
-        try:
-            requests.post(url, json={
-                "chat_id": chat_id,
-                "text": part,
-                "disable_web_page_preview": True
-            }, timeout=10)
-        except Exception as e:
-            logging.error(f"[AI-AUTOFIX] Failed to send admin notification: {e}")
