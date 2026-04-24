@@ -8,6 +8,12 @@ A Telegram bot that downloads media from YouTube, YouTube Music, TikTok, and Ins
   - **yt-dlp** (primary method)
   - **Cobalt API** (fallback with funny status messages)
   - **TikWM** (TikTok-only fallback)
+- 🤖 **AI extractor auto-fix (optional)**:
+  - Runs after regular fallback chain fails on extractor-like errors
+  - Uses Groq to generate/patch yt-dlp plugin extractor modules
+  - Requires mandatory network readiness + mandatory URL verification before accepting a generated module
+  - Auto-retries download only after verification and notifies admin
+  - Can automatically create a GitHub PR with persisted generated extractor code
 - 🌐 **Supported platforms**:
   - YouTube videos with format selection (Video/Audio)
   - YouTube Music (automatic MP3 extraction)
@@ -93,6 +99,16 @@ COBALT_API_KEY=your_api_key
 # SOCKS5 Proxy (optional, for geo-restricted content)
 HTTP_PROXY=socks5://user:password@proxy-host:1080
 SOCKS_PROXY=socks5://user:password@proxy-host:1080
+
+# AI extractor auto-fix (optional)
+AI_AUTOFIX_ENABLED=false
+GROQ_API_KEY=your_groq_api_key
+GROQ_MODEL=llama-3.3-70b-versatile
+AI_AUTOFIX_REQUIRE_NETWORK=true
+AI_AUTOFIX_CREATE_PR=false
+GITHUB_TOKEN=github_pat_...
+GITHUB_REPO=datapeice/ytttins_dl
+GITHUB_PR_BASE=main
 ```
 
 > **Note**: Get your bot token from [@BotFather](https://t.me/botfather) on Telegram
