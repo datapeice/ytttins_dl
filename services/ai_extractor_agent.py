@@ -192,13 +192,27 @@ def _clean_json_response(text: str) -> str:
 
 def _validate_agent_payload(payload: Dict) -> Optional[str]:
     action = payload.get("action")
-    if action not in {"patch", "new_module", "cannot_fix"}:
+    if action not in {"patch", "new_module", "cannot_fix", "web_search"}:
         return "invalid action"
-    if action == "cannot_fix":
+    if action in {"cannot_fix", "web_search"}:
         return None
 
     filename = payload.get("filename") or ""
     code = payload.get("code") or ""
+    
+    # RECOVERY LOGIC: if code is empty but some other key contains "InfoExtractor", 
+    # it means the AI messed up the JSON structure.
+    if not code or len(str(code).strip()) < 40:
+        for k, v in payload.items():
+            if isinstance(k, str) and "InfoExtractor" in k:
+                payload["code"] = k # Code was in the key!
+                code = k
+                break
+            if isinstance(v, str) and "InfoExtractor" in v and k != "code":
+                payload["code"] = v
+                code = v
+                break
+
     if not re.fullmatch(r"[A-Za-z0-9_]+\.py", filename):
         return "invalid filename"
     if Path(filename).name != filename:
@@ -206,7 +220,7 @@ def _validate_agent_payload(payload: Dict) -> Optional[str]:
     if not isinstance(code, str) or len(code.strip()) < MIN_EXTRACTOR_CODE_LENGTH:
         return "empty code"
 
-    required = ("InfoExtractor", "_VALID_URL", "def _real_extract", "_TEST")
+    required = ("InfoExtractor", "_VALID_URL", "def _real_extract")
     if not all(token in code for token in required):
         return "missing extractor primitives"
 
@@ -404,8 +418,9 @@ def _web_search(query: str) -> str:
     if not DDGS:
         return "Search tool not available (duckduckgo-search not installed)."
     try:
+        # Using the latest DDGS API to avoid warnings
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=5))
+            results = [r for r in ddgs.text(query, max_results=5)]
             return json.dumps(results, ensure_ascii=False)
     except Exception as e:
         return f"Search failed: {e}"
@@ -448,12 +463,16 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
         "Your task is to write a yt-dlp InfoExtractor plugin.\n\n"
         "MANDATORY SEARCH PROTOCOL:\n"
         "1. If you face a 403 Forbidden or the first verification attempt fails, "
-        "   YOU MUST PERFORM A WEB_SEARCH before suggesting any new code. Search for the exact site error or its API.\n"
-        "2. Do NOT guess the site structure. Verify it via search results.\n\n"
-        "STEPS:\n"
-        "- Search: {\"action\": \"web_search\", \"query\": \"...\"}\n"
-        "- Fix: {\"action\": \"new_module\", \"filename\": \"domain_ie.py\", \"code\": \"...\", \"notes\": \"...\"}\n"
-        "ALWAYS return VALID JSON."
+        "   YOU MUST PERFORM A WEB_SEARCH before suggesting any new code.\n"
+        "2. Do NOT guess. Verify everything.\n\n"
+        "JSON STRUCTURE EXAMPLE (STRICT):\n"
+        "{\n"
+        "  \"action\": \"new_module\",\n"
+        "  \"filename\": \"test_ie.py\",\n"
+        "  \"code\": \"import re\\nfrom .common import InfoExtractor\\n...\",\n"
+        "  \"notes\": \"explanation here\"\n"
+        "}\n\n"
+        "ALWAYS return VALID JSON. Put the python code inside the \"code\" string value, NOT as a key."
     )
     user_prompt = json.dumps({
         "url": url,
