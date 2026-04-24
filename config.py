@@ -24,6 +24,11 @@ SOCKS_PROXY = os.getenv("SOCKS_PROXY", "")
 AI_AUTOFIX_ENABLED = os.getenv("AI_AUTOFIX_ENABLED", "false").lower() == "true"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+AI_AUTOFIX_REQUIRE_NETWORK = os.getenv("AI_AUTOFIX_REQUIRE_NETWORK", "true").lower() == "true"
+AI_AUTOFIX_CREATE_PR = os.getenv("AI_AUTOFIX_CREATE_PR", "false").lower() == "true"
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+GITHUB_REPO = os.getenv("GITHUB_REPO", os.getenv("GITHUB_REPOSITORY", ""))
+GITHUB_PR_BASE = os.getenv("GITHUB_PR_BASE", "main")
 
 BASE_DIR = Path(__file__).parent
 DOWNLOADS_DIR = BASE_DIR / "downloads"
