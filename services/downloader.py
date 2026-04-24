@@ -1427,7 +1427,6 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
         # Retry once if we hit the curl_cffi shutdown error
         if "cannot schedule new futures after shutdown" in err_text and attempt == 1:
             logging.warning("⚠️ curl_cffi shutdown error detected. Retrying download once...")
-            attempt = 2
             # Wait a moment for things to settle
             await asyncio.sleep(2)
             # Recursively call with attempt 2
