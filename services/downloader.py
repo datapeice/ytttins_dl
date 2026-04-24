@@ -311,8 +311,7 @@ def is_playlist(url: str) -> bool:
             return True
             
     # YouTube Music albums (often playlists)
-    playlist_host = (urlparse(url).hostname or "").lower()
-    if playlist_host == "music.youtube.com" and "browse/VLPL" in url:
+    if url_lower.startswith("https://music.youtube.com/") and "browse/vlpl" in url_lower:
         return True
     return False
 
@@ -1246,7 +1245,12 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
     try:
         impersonate_target = IMPERSONATE_TARGETS[(attempt - 1) % len(IMPERSONATE_TARGETS)]
         parsed_host = (urlparse(url).hostname or "").lower()
-        is_facebook = parsed_host == "fb.watch" or parsed_host == "facebook.com" or parsed_host.endswith(".facebook.com")
+        is_facebook = (
+            parsed_host == "fb.watch"
+            or parsed_host.endswith(".fb.watch")
+            or parsed_host == "facebook.com"
+            or parsed_host.endswith(".facebook.com")
+        )
         if is_facebook:
             impersonate_target = 'chrome-99'
         
@@ -1401,7 +1405,7 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     
     except Exception as e:
         err_text = str(e)
-        max_http_retries = min(MAX_HTTP_ACCESS_DENIED_RETRIES, len(USER_AGENTS), len(IMPERSONATE_TARGETS))
+        max_http_retries = MAX_HTTP_ACCESS_DENIED_RETRIES
         if _is_http_access_denied_error(err_text) and attempt < max_http_retries:
             logging.warning(
                 f"⚠️ Access-denied response on attempt {attempt}/{max_http_retries}. "
