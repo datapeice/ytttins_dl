@@ -90,24 +90,17 @@ def _fetch_html_snippet(url: str) -> str:
     """Fetches HTML using curl_cffi to bypass basic protection."""
     try:
         from curl_cffi import requests as curl_requests
-        # We try to mimic a real browser to get the best possible snippet
         resp = curl_requests.get(
             url, 
             impersonate="chrome110", 
             timeout=15,
-            return ""
-
-        chunks = []
-        total = 0
-        for chunk in resp.iter_content(chunk_size=4096):
-            if not chunk:
-                continue
-            text_chunk = chunk.decode(resp.encoding or "utf-8", errors="ignore")
-            chunks.append(text_chunk)
-            total += len(text_chunk)
-            if total >= 5000:
-                break
-        return "".join(chunks)[:5000]
+            verify=False
+        )
+        resp.raise_for_status()
+        return resp.text[:15000]
+    except Exception as e:
+        logging.warning(f"[AI-EXTRACTOR] Failed to fetch HTML via curl_cffi: {e}")
+        return f"Error fetching HTML: {e}"
     except Exception as e:
         logging.warning(f"[AI-AUTOFIX] Could not fetch HTML snippet: {e}")
     return ""
