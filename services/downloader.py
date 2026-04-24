@@ -11,6 +11,7 @@ import concurrent.futures
 import subprocess
 from pathlib import Path
 from typing import Tuple, Dict, Optional, Callable, Union, List
+from urllib.parse import urlparse
 
 from config import DOWNLOADS_DIR, DATA_DIR, COOKIES_CONTENT, USE_COBALT, COBALT_API_URL, SOCKS_PROXY
 from database.storage import stats
@@ -29,6 +30,9 @@ USER_AGENTS = [
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0',
 ]
+
+MAX_HTTP_ACCESS_DENIED_RETRIES = 4
+HTTP_RETRY_DELAY_SECONDS = 1.5
 
 def generate_video_thumbnail(video_path: Path, output_path: Path) -> bool:
     """Generate a high-quality thumbnail from video using ffmpeg."""
@@ -307,7 +311,8 @@ def is_playlist(url: str) -> bool:
             return True
             
     # YouTube Music albums (often playlists)
-    if "music.youtube.com" in url_lower and "browse/VLPL" in url:
+    playlist_host = (urlparse(url).hostname or "").lower()
+    if playlist_host == "music.youtube.com" and "browse/VLPL" in url:
         return True
     return False
 
@@ -1240,7 +1245,8 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
     
     try:
         impersonate_target = IMPERSONATE_TARGETS[(attempt - 1) % len(IMPERSONATE_TARGETS)]
-        is_facebook = "facebook.com" in url or "fb.watch" in url
+        parsed_host = (urlparse(url).hostname or "").lower()
+        is_facebook = parsed_host == "fb.watch" or parsed_host == "facebook.com" or parsed_host.endswith(".facebook.com")
         if is_facebook:
             impersonate_target = 'chrome-99'
         
@@ -1395,13 +1401,13 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                     
     except Exception as e:
         err_text = str(e)
-        max_http_retries = min(4, len(USER_AGENTS), len(IMPERSONATE_TARGETS))
+        max_http_retries = min(MAX_HTTP_ACCESS_DENIED_RETRIES, len(USER_AGENTS), len(IMPERSONATE_TARGETS))
         if _is_http_access_denied_error(err_text) and attempt < max_http_retries:
             logging.warning(
                 f"⚠️ Access-denied response on attempt {attempt}/{max_http_retries}. "
                 f"Retrying with an alternate browser fingerprint..."
             )
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(HTTP_RETRY_DELAY_SECONDS)
             return await _download_local_ytdlp(
                 url,
                 is_music,
