@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+from pathlib import Path
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
@@ -199,10 +200,12 @@ async def handle_landing_page(request):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YTTTINS DL Bot</title>
-    <meta name="description" content="A powerful Telegram bot for downloading media from YouTube, Instagram, TikTok, and 1800+ other platforms.">
+    <meta name="description" content="A powerful Telegram bot for downloading media from YouTube, Instagram, TikTok, torrents, and 1800+ other platforms with AI-powered live patching.">
     <meta property="og:title" content="YTTTINS DL Bot">
-    <meta property="og:description" content="Download media from YouTube, Instagram, TikTok & more — right in Telegram.">
+    <meta property="og:description" content="Download media from YouTube, Instagram, TikTok, torrents & more — right in Telegram. AI-powered. Unstoppable.">
     <meta property="og:type" content="website">
+    <meta property="og:image" content="/icon.png">
+    <link rel="icon" type="image/png" href="/icon.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
@@ -226,10 +229,9 @@ async def handle_landing_page(request):
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            overflow: hidden;
+            overflow-x: hidden;
             position: relative;
         }
-        /* Animated gradient orbs */
         .orb {
             position: absolute;
             border-radius: 50%;
@@ -238,7 +240,7 @@ async def handle_landing_page(request):
             animation: float 12s ease-in-out infinite;
             pointer-events: none;
         }
-        .orb-1 { width: 400px; height: 400px; background: #6c63ff; top: -10%; left: -5%; animation-delay: 0s; }
+        .orb-1 { width: 400px; height: 400px; background: #6c63ff; top: -10%; left: -5%; }
         .orb-2 { width: 350px; height: 350px; background: #2AABEE; bottom: -10%; right: -5%; animation-delay: -4s; }
         .orb-3 { width: 200px; height: 200px; background: #e040fb; top: 50%; left: 60%; animation-delay: -8s; }
         @keyframes float {
@@ -250,24 +252,23 @@ async def handle_landing_page(request):
             position: relative;
             z-index: 1;
             text-align: center;
-            padding: 2rem;
-            max-width: 520px;
+            padding: 2rem 1.5rem;
+            max-width: 540px;
             width: 100%;
         }
-        .logo-ring {
-            width: 100px; height: 100px;
-            margin: 0 auto 2rem;
-            border-radius: 50%;
-            background: linear-gradient(135deg, var(--accent), var(--tg-blue));
-            display: flex; align-items: center; justify-content: center;
+        .logo-img {
+            width: 110px; height: 110px;
+            margin: 0 auto 1.8rem;
+            border-radius: 28px;
+            object-fit: cover;
             box-shadow: 0 0 40px var(--accent-glow), 0 0 80px rgba(42,171,238,0.15);
             animation: pulse-ring 3s ease-in-out infinite;
+            border: 3px solid rgba(255,255,255,0.1);
         }
         @keyframes pulse-ring {
             0%, 100% { box-shadow: 0 0 40px var(--accent-glow), 0 0 80px rgba(42,171,238,0.15); }
             50% { box-shadow: 0 0 60px var(--accent-glow), 0 0 120px rgba(42,171,238,0.25); }
         }
-        .logo-ring svg { width: 48px; height: 48px; fill: white; }
         h1 {
             font-size: 2.2rem;
             font-weight: 800;
@@ -282,37 +283,37 @@ async def handle_landing_page(request):
             font-size: 1rem;
             color: var(--text-muted);
             font-weight: 400;
-            margin-bottom: 2.5rem;
+            margin-bottom: 2rem;
             line-height: 1.6;
         }
         .card {
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: 16px;
-            padding: 2rem;
-            margin-bottom: 2rem;
+            padding: 1.8rem;
+            margin-bottom: 1.8rem;
             backdrop-filter: blur(20px);
         }
         .features {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 1rem;
+            gap: 1.2rem;
             text-align: left;
-            margin-bottom: 0;
         }
         .feature {
             display: flex;
             align-items: flex-start;
-            gap: 0.6rem;
+            gap: 0.65rem;
             font-size: 0.85rem;
             color: var(--text-muted);
+            line-height: 1.4;
         }
         .feature-icon {
-            font-size: 1.1rem;
+            font-size: 1.2rem;
             flex-shrink: 0;
             margin-top: 1px;
         }
-        .feature strong { color: var(--text); font-weight: 500; }
+        .feature strong { color: var(--text); font-weight: 600; }
         .cta-btn {
             display: inline-flex;
             align-items: center;
@@ -326,7 +327,6 @@ async def handle_landing_page(request):
             font-size: 1rem;
             transition: all 0.3s ease;
             box-shadow: 0 4px 20px rgba(42,171,238,0.3);
-            letter-spacing: 0.01em;
         }
         .cta-btn:hover {
             transform: translateY(-2px) scale(1.02);
@@ -334,13 +334,14 @@ async def handle_landing_page(request):
         }
         .cta-btn svg { width: 20px; height: 20px; fill: currentColor; }
         .status {
-            margin-top: 2rem;
+            margin-top: 1.8rem;
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 0.5rem;
-            font-size: 0.8rem;
-            color: var(--text-muted);
+            font-size: 0.85rem;
+            color: #22c55e;
+            font-weight: 500;
         }
         .status-dot {
             width: 8px; height: 8px;
@@ -353,16 +354,29 @@ async def handle_landing_page(request):
             0%, 100% { opacity: 1; }
             50% { opacity: 0.4; }
         }
+        .star-note {
+            margin-top: 1.5rem;
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+        .star-note a {
+            color: #facc15;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .star-note a:hover { text-decoration: underline; }
         .footer {
-            margin-top: 2.5rem;
+            margin-top: 2rem;
             font-size: 0.7rem;
             color: var(--text-muted);
-            opacity: 0.5;
+            opacity: 0.4;
         }
         @media (max-width: 480px) {
             h1 { font-size: 1.6rem; }
             .features { grid-template-columns: 1fr; }
-            .card { padding: 1.5rem; }
+            .card { padding: 1.4rem; }
+            .logo-img { width: 90px; height: 90px; border-radius: 22px; }
         }
     </style>
 </head>
@@ -372,30 +386,28 @@ async def handle_landing_page(request):
     <div class="orb orb-3"></div>
 
     <div class="container">
-        <div class="logo-ring">
-            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
-        </div>
+        <img src="/icon.png" alt="YTTTINS DL Bot" class="logo-img">
 
         <h1>YTTTINS DL Bot</h1>
-        <p class="tagline">A powerful media downloader running on this server.<br>Send any link — get your file in seconds.</p>
+        <p class="tagline">A powerful media downloader running on this server.<br>Send any link &mdash; get your file in seconds.</p>
 
         <div class="card">
             <div class="features">
                 <div class="feature">
-                    <span class="feature-icon">🎬</span>
-                    <div><strong>YouTube</strong><br>Videos & Music</div>
+                    <span class="feature-icon">&#127916;</span>
+                    <div><strong>YouTube, Instagram, TikTok</strong><br>Videos, music, reels &mdash; no watermarks</div>
                 </div>
                 <div class="feature">
-                    <span class="feature-icon">📸</span>
-                    <div><strong>Instagram</strong><br>Reels & Stories</div>
+                    <span class="feature-icon">&#128229;</span>
+                    <div><strong>Torrents</strong><br>Magnet links &amp; .torrent files</div>
                 </div>
                 <div class="feature">
-                    <span class="feature-icon">🎵</span>
-                    <div><strong>TikTok</strong><br>No watermark</div>
+                    <span class="feature-icon">&#127760;</span>
+                    <div><strong>1800+ Sites</strong><br>Powered by yt-dlp &amp; hard work of the developer</div>
                 </div>
                 <div class="feature">
-                    <span class="feature-icon">🌐</span>
-                    <div><strong>1800+ Sites</strong><br>Powered by yt-dlp</div>
+                    <span class="feature-icon">&#129302;</span>
+                    <div><strong>AI Live Patching</strong><br>Tries to download literally <em>everything</em></div>
                 </div>
             </div>
         </div>
@@ -407,8 +419,12 @@ async def handle_landing_page(request):
 
         <div class="status">
             <span class="status-dot"></span>
-            Bot is online and ready
+            Online &mdash; ready to take on your challenges
         </div>
+
+        <p class="star-note">
+            &#11088; The developer would be grateful if you <a href="https://t.me/ytttinsdl_bot" target="_blank">leave a star</a> for the bot in Telegram!
+        </p>
 
         <div class="footer">bot.datapeice.me</div>
     </div>
@@ -416,6 +432,13 @@ async def handle_landing_page(request):
 </html>
 """
     return web.Response(text=html, content_type='text/html')
+
+async def handle_icon(request):
+    """Serve the bot icon."""
+    icon_path = Path(__file__).parent / "icon.png"
+    if icon_path.exists():
+        return web.FileResponse(icon_path, headers={'Cache-Control': 'public, max-age=86400'})
+    return web.Response(status=404)
 
 def main():
     if not BOT_TOKEN:
@@ -446,6 +469,8 @@ def main():
     
     # Routes
     app.router.add_get('/', handle_landing_page)
+    app.router.add_get('/icon.png', handle_icon)
+    app.router.add_get('/favicon.ico', handle_icon)
     app.router.add_get('/dl/{secure_id}', handle_zip_download_page)
     app.router.add_get('/dl/file/{secure_id}', handle_zip_file_serve)
     
