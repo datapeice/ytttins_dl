@@ -601,3 +601,32 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
 
     _notify_admin("\n".join(report_logs))
     return {"attempted": True, "success": False, "reason": "max_retries_exceeded"}
+
+
+def _notify_admin(report: str):
+    """Sends a summary report to the administrator via Telegram."""
+    chat_id = os.getenv("ADMIN_CHAT_ID")
+    token = os.getenv("BOT_TOKEN")
+    
+    if not (chat_id and token):
+        logging.warning("[AI-AUTOFIX] Admin notification skipped: ADMIN_CHAT_ID or BOT_TOKEN missing.")
+        return
+
+    logging.info(f"[AI-AUTOFIX] Sending summary report to admin ({chat_id})...")
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    
+    # Split message if too long for Telegram (4096 chars)
+    if len(report) > 4000:
+        parts = [report[i:i+4000] for i in range(0, len(report), 4000)]
+    else:
+        parts = [report]
+
+    for part in parts:
+        try:
+            requests.post(url, json={
+                "chat_id": chat_id,
+                "text": part,
+                "disable_web_page_preview": True
+            }, timeout=10)
+        except Exception as e:
+            logging.error(f"[AI-AUTOFIX] Failed to send admin notification: {e}")

@@ -1178,12 +1178,10 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                     await wrapped_callback("🤖 AI bot is autonomously applying extractor patches now. A retry will follow automatically if successful.")
                 logging.info(f"[AI-AUTOFIX] Attempting Groq-based extractor fix for: {url}")
                 
-                # Fix AssertionError in newer yt-dlp: remove explicit impersonate string, let it handle it
                 verify_opts = {
                     'proxy': SOCKS_PROXY if SOCKS_PROXY else '',
                     'socket_timeout': 15,
                     'nocheckcertificate': True,
-                    'plugin_dirs': [str(AUTO_PLUGIN_DIR)],
                 }
                 
                 ai_autofix_result = await asyncio.to_thread(run_ai_extractor_autofix, url, str(ytdlp_error), verify_opts)
@@ -1212,7 +1210,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         if ai_autofix_attempted:
             current_ts = datetime.now().strftime("%H:%M")
             logging.info(f"[AI-AUTOFIX] [{current_ts}] Final failure for user. Original error: {ytdlp_error}")
-            raise Exception("❌ Error: can't download. AI tried but also can't. Administrator has been notified.")
+            raise Exception("❌ Download failed. I tried to apply a patch via AI, but it didn't help either. The administrator has been notified.")
 
         raise Exception(f"All download methods failed. YT-DLP error: {ytdlp_error}")
     finally:
