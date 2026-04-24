@@ -1104,7 +1104,7 @@ async def handle_url(message: types.Message, bot: Bot):
             user_error = "⚠️ YouTube requires authentication (cookies). Please contact the bot admin."
         elif "AI-AUTOFIX-ATTEMPTED" in error_msg:
             user_error = (
-                "🤖 AI bot attempted to fix this extractor, but this download still failed.\n"
+                "🤖 AI bot autonomously attempted to apply extractor patches, but this download still failed.\n"
                 "Admin has been notified with verification details and (if enabled) PR status.\n\n"
                 f"```error\n{error_msg}\n```"
             )

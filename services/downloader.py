@@ -1174,12 +1174,12 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             ai_autofix_attempted = True
             try:
                 if progress_callback:
-                    await wrapped_callback("🤖 AI bot is now attempting to fix this extractor. A retry will follow automatically if successful.")
+                    await wrapped_callback("🤖 AI bot is autonomously applying extractor patches now. A retry will follow automatically if successful.")
                 logging.info(f"[AI-AUTOFIX] Attempting Groq-based extractor fix for: {url}")
                 ai_autofix_result = await asyncio.to_thread(run_ai_extractor_autofix, url, str(ytdlp_error))
                 if ai_autofix_result and ai_autofix_result.get("success"):
                     if progress_callback:
-                        await wrapped_callback("🤖 Extractor patch applied. Retrying download...")
+                        await wrapped_callback("🤖 Autonomous extractor patch applied. Retrying download...")
                     logging.info(f"[AI-AUTOFIX] ✅ Module applied: {ai_autofix_result.get('filename')}")
                     return await _download_local_ytdlp(
                         url,
