@@ -145,6 +145,7 @@ def _check_network_readiness(url: str) -> Optional[str]:
             headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
             timeout=TARGET_CONNECT_TIMEOUT_SECONDS,
             verify=True,
+            proxies={"http": None, "https": None},
         )
         if response.status_code in (401, 403):
             return "groq_auth_failed"
@@ -402,9 +403,20 @@ def run_ai_extractor_autofix(url: str, error_message: str) -> Dict:
     candidate_filename = f"{safe_domain}_ie.py"
     existing_code = _read_existing_extractor(candidate_filename)
     system_prompt = (
-        "You are an expert Python developer specializing in yt-dlp extractor architecture. "
-        "Return strict JSON only. "
-        "If not fixable, use action=cannot_fix."
+        "You are an expert autonomous AI agent specializing in yt-dlp extractor architecture. "
+        "Your task is to write a yt-dlp InfoExtractor plugin that bypasses strict protections and extracts the raw video URL from the provided HTML snippet. "
+        "Think analytically step-by-step:\n"
+        "1. Examine the HTML snippet for video patterns (mp4, m3u8, CDN links, JSON data).\n"
+        "2. Write robust Python regex to grab those links.\n"
+        "3. Ensure your '_real_extract' method implements a fallback logic and returns the expected dictionary.\n"
+        "You MUST return strict JSON only. Use the following format:\n"
+        "{\n"
+        "  \"action\": \"new_module\",\n"
+        "  \"filename\": \"domain_ie.py\",\n"
+        "  \"code\": \"import re\\nfrom yt_dlp.extractor.common import InfoExtractor\\n...\",\n"
+        "  \"notes\": \"Explanation of your solution\"\n"
+        "}\n"
+        "If absolutely not fixable, use action=cannot_fix."
     )
     user_prompt = json.dumps({
         "url": url,
@@ -430,6 +442,7 @@ def run_ai_extractor_autofix(url: str, error_message: str) -> Dict:
                 ],
             },
             timeout=GROQ_API_TIMEOUT_SECONDS,
+            proxies={"http": None, "https": None},
         )
         response.raise_for_status()
         body = response.json()
@@ -441,6 +454,10 @@ def run_ai_extractor_autofix(url: str, error_message: str) -> Dict:
             raise ValueError("Groq response missing message content")
         content = message["content"]
         payload = json.loads(_clean_json_response(content))
+    except requests.exceptions.HTTPError as e:
+        err_msg = f"HTTP Error {e.response.status_code}: {e.response.text}"
+        _notify_admin(f"❌ AI extractor autofix failed to call Groq for {url}\nError: {err_msg}")
+        return {"attempted": True, "success": False, "reason": f"groq_call_failed: {err_msg}"}
     except Exception as e:
         _notify_admin(f"❌ AI extractor autofix failed to call Groq for {url}\nError: {e}")
         return {"attempted": True, "success": False, "reason": f"groq_call_failed: {e}"}
