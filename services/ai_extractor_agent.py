@@ -42,6 +42,7 @@ PERSISTED_EXTRACTORS_DIR = "services/generated_extractors"
 GITHUB_API_BASE = "https://api.github.com"
 
 
+
 def get_plugin_dirs() -> List[str]:
     _ensure_plugin_layout()
     return [str(AUTO_PLUGIN_ROOT)]
