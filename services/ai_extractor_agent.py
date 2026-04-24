@@ -305,14 +305,16 @@ def _verify_generated_extractor(url: str, verify_opts_override: Optional[Dict] =
 
     try:
         with yt_dlp.YoutubeDL(verify_opts) as ydl:
+            # We must use the same URL that failed originally
             info = ydl.extract_info(url, download=False)
         if not _extract_has_stream(info):
-            return "verification_failed_no_stream_url"
+            return "verification_failed_no_stream_url (the generated extractor did not return any media links)"
     except Exception as e:
-        err = str(e)
-        if _is_network_resolution_error(err):
-            return f"verification_network_error:{err}"
-        return f"verification_failed:{err}"
+        # Include full exception detail for the AI to learn
+        err_detail = f"{type(e).__name__}: {str(e)}"
+        if _is_network_resolution_error(err_detail):
+            return f"verification_network_error:{err_detail}"
+        return f"verification_failed_runtime_error:{err_detail}"
     return None
 
 
@@ -413,9 +415,13 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
         return {"attempted": False, "reason": "missing_groq_key"}
     
     report_logs = []
-    def log_report(msg: str):
+    def log_report(msg: str, system_only_extra: Optional[str] = None):
+        # Full content goes to system logs
+        full_log = f"{msg}\n{system_only_extra}" if system_only_extra else msg
+        logging.info(f"[AI-AUTOFIX] {full_log}")
+        
+        # Only the concise 'msg' goes to Telegram summary
         report_logs.append(msg)
-        logging.info(f"[AI-AUTOFIX] {msg}")
 
     if AI_AUTOFIX_REQUIRE_NETWORK:
         network_issue = _check_network_readiness(url)
@@ -436,17 +442,17 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
     
     system_prompt = (
         "You are an expert autonomous AI agent specializing in yt-dlp extractor architecture.\n"
-        "Your task is to write a yt-dlp InfoExtractor plugin that extracts video URLs.\n\n"
+        "Your task is to write a yt-dlp InfoExtractor plugin that extracts video URLs from protected sites.\n\n"
+        "CRITICAL INSTRUCTIONS:\n"
+        "1. If you see signs of bot protection (Cloudflare, 403 Forbidden) or don't know the site's structure, "
+        "   YOU MUST use the 'web_search' action first! Search for 'python yt-dlp extractor [site name]' or '[site name] video api'.\n"
+        "2. Do NOT guess URLs (like torrent trackers or random IPs). Use logic based on HTML or search results.\n"
+        "3. Your final output must be a Python module with a class inheriting from InfoExtractor.\n\n"
         "STEPS:\n"
-        "1. Examine the HTML and error. If you need to search for site info/API, return:\n"
-        "   {\"action\": \"web_search\", \"query\": \"search query\"}\n"
-        "2. To provide the final fix, return:\n"
-        "   {\"action\": \"new_module\", \"filename\": \"domain_ie.py\", \"code\": \"python code\", \"notes\": \"...\"}\n"
-        "3. If unfixable, return:\n"
-        "   {\"action\": \"cannot_fix\", \"notes\": \"reason\"}\n\n"
-        "RULES:\n"
-        "- ALWAYS return VALID JSON.\n"
-        "- Use only standard Python + yt-dlp primitives."
+        "- To search: {\"action\": \"web_search\", \"query\": \"...\"}\n"
+        "- To provide fix: {\"action\": \"new_module\", \"filename\": \"domain_ie.py\", \"code\": \"...\", \"notes\": \"...\"}\n"
+        "- If impossible: {\"action\": \"cannot_fix\", \"notes\": \"...\"}\n\n"
+        "ALWAYS return VALID JSON."
     )
     user_prompt = json.dumps({
         "url": url,
@@ -491,7 +497,8 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
             if not content:
                 raise ValueError("Empty response from Groq")
             
-            log_report(f"Agent step {attempt+1} received.")
+            # Log FULL response to system logs, but only a summary to TG
+            log_report(f"Agent step {attempt+1} received. (Size: {len(content)} chars)", system_only_extra=f"--- FULL RESPONSE ---\n{content}")
             payload = json.loads(_clean_json_response(content), strict=False)
             
             # Manual tool handling
@@ -522,11 +529,16 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
             filename = payload["filename"]
             code = payload["code"]
             module_path = PLUGIN_EXTRACTOR_DIR / filename
+            
+            # Telegram: only AI explanation (notes). System Logs: FULL CODE.
+            notes = payload.get("notes", "No notes provided")
+            log_report(f"🛠️ Agent suggestion for {filename}:\nExplanation: {notes}", system_only_extra=f"--- FULL GENERATED CODE ---\n{code}")
+            
             module_path.write_text(code, encoding="utf-8")
 
             verify_error = _verify_generated_extractor(url, verify_opts)
             if verify_error:
-                log_report(f"⚠️ Attempt {attempt+1} verification failed: {verify_error}")
+                log_report(f"⚠️ Step {attempt+1} verification failed: {verify_error}")
                 if attempt == 0:
                     if module_path.exists():
                         module_path.unlink()
