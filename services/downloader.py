@@ -295,7 +295,7 @@ def _is_http_access_denied_error(message: str) -> bool:
 
 def is_youtube_music(url: str) -> bool:
     parsed_host = (urlparse(url).hostname or "").lower()
-    return parsed_host == "music.youtube.com"
+    return parsed_host in ("music.youtube.com", "www.music.youtube.com")
 
 def is_playlist(url: str) -> bool:
     """Detect if the URL is a playlist or album."""
@@ -313,7 +313,7 @@ def is_playlist(url: str) -> bool:
             
     # YouTube Music albums (often playlists)
     playlist_host = (urlparse(url).hostname or "").lower()
-    if playlist_host == "music.youtube.com" and "browse/VLPL" in url:
+    if playlist_host in ("music.youtube.com", "www.music.youtube.com") and "browse/VLPL" in url:
         return True
     return False
 
@@ -1436,11 +1436,6 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
         logging.error(f"YT-DLP critical error: {err_text[:200]}")
         raise e
     
-    # All attempts failed with 403/429
-    raise last_error if last_error else Exception("All user-agent attempts failed")
-
-
-
 async def _download_local_tiktok(url: str, use_proxy: bool = False, progress_callback: Callable = None) -> Tuple[Union[Path, List[Path]], Optional[Path], Dict]:
     """Скачивание TikTok на VPS. Поддерживает видео (h264) и фото-слайдшоу."""
     
