@@ -1180,7 +1180,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 
                 verify_opts = {
                     'proxy': SOCKS_PROXY if SOCKS_PROXY else '',
-                    'socket_timeout': 15,
+                    'socket_timeout': 5,
                     'nocheckcertificate': True,
                 }
                 

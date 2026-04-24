@@ -470,7 +470,11 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
         "Your task is to write a yt-dlp InfoExtractor plugin.\n\n"
         "OPERATING MODE:\n"
         "1. FIRST PRIORITY: Analyze the provided HTML snippet (fetched via server-side curl) and write the fix immediately.\n"
-        "2. SECOND PRIORITY: If your first fix fails or you are stuck, use 'web_search' to find site-specific API or logic.\n\n"
+        "2. SECOND PRIORITY: If your first fix fails or you are stuck, use 'web_search'.\n\n"
+        "RULES FOR THE EXTRACTOR CODE:\n"
+        "- NEVER import 'requests' or 'urllib' inside the extractor module.\n"
+        "- ALWAYS use native yt-dlp methods like 'self._download_webpage', 'self._download_json', or 'self._request_webpage'.\n"
+        "- This ensures that proxies and TLS impersonation settings are correctly inherited from the main process.\n\n"
         "JSON STRUCTURE EXAMPLE:\n"
         "{\n"
         "  \"action\": \"new_module\",\n"
@@ -497,6 +501,8 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
     tools = None
 
     for attempt in range(4):  # Steps allowed (e.g. search + search + fix)
+        if attempt > 0:
+            time.sleep(5)  # Backoff to avoid Groq 429
         try:
             payload_json = {
                 "model": GROQ_MODEL,
