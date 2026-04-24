@@ -26,13 +26,13 @@ async def check_premium_expiry_worker(bot: Bot):
     """Background worker to check premium expiries."""
     from database.storage import stats
     from database.models import UserProfile
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, UTC
     
     while True:
         try:
             if stats.Session:
                 with stats.Session() as session:
-                    now = datetime.utcnow()
+                    now = datetime.now(UTC).replace(tzinfo=None)
                     soon = now + timedelta(days=1)
                     
                     # Notified Expiry Soon

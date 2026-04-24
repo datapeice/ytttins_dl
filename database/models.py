@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, DateTime, BigInteger
 from sqlalchemy.orm import declarative_base
-from datetime import datetime
+from datetime import datetime, UTC
 
 Base = declarative_base()
 
@@ -23,13 +23,13 @@ class ActiveUser(Base):
 class ActiveGroup(Base):
     __tablename__ = 'active_groups'
     chat_id = Column(BigInteger, primary_key=True)
-    added_at = Column(DateTime, default=datetime.utcnow)
+    added_at = Column(DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None))
 
 class Cookie(Base):
     __tablename__ = 'cookies'
     id = Column(Integer, primary_key=True)
     content = Column(String)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None))
 
 class DownloadHistory(Base):
     __tablename__ = 'download_history'
@@ -40,7 +40,7 @@ class DownloadHistory(Base):
     content_type = Column(String)
     url = Column(String)
     title = Column(String)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None))
 
 class UserProfile(Base):
     __tablename__ = 'user_profiles'
