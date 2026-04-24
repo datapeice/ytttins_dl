@@ -1177,15 +1177,16 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                     await wrapped_callback("🤖 AI bot is autonomously applying extractor patches now. A retry will follow automatically if successful.")
                 logging.info(f"[AI-AUTOFIX] Attempting Groq-based extractor fix for: {url}")
                 
-                # Reconstruct verify_opts for the AI agent (using same proxy/TLS settings)
+                # Fix AssertionError in newer yt-dlp: remove explicit impersonate string, let it handle it
                 verify_opts = {
                     'proxy': SOCKS_PROXY if SOCKS_PROXY else '',
-                    'impersonate': IMPERSONATE_TARGETS[0] if IMPERSONATE_TARGETS else None,
                     'socket_timeout': 15,
                     'nocheckcertificate': True,
+                    'plugin_dirs': [str(AUTO_PLUGIN_DIR)],
                 }
                 
                 ai_autofix_result = await asyncio.to_thread(run_ai_extractor_autofix, url, str(ytdlp_error), verify_opts)
+                
                 if ai_autofix_result and ai_autofix_result.get("success"):
                     if progress_callback:
                         await wrapped_callback("🤖 Autonomous extractor patch applied. Retrying download...")
@@ -1198,7 +1199,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                         progress_callback=wrapped_callback if progress_callback else None,
                     )
             except Exception as ai_err:
-                logging.error(f"[AI-AUTOFIX] ❌ Unexpected failure: {ai_err}")
+                logging.error(f"[AI-AUTOFIX] Critical agent error: {ai_err}")
 
         # Все методы провалились
         error_msg = str(ytdlp_error) if ytdlp_error else "Unknown error"
@@ -1208,12 +1209,9 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             raise Exception("Instagram requires new cookies. Please contact the administrator to update cookies.txt.")
 
         if ai_autofix_attempted:
-            ai_reason = (ai_autofix_result or {}).get("reason", "autofix_not_applied")
-            raise Exception(
-                f"All download methods failed. YT-DLP error: {ytdlp_error}\n"
-                f"AI-AUTOFIX-ATTEMPTED: AI bot attempted extractor recovery, but this request still failed "
-                f"(reason: {ai_reason})."
-            )
+            current_ts = datetime.now().strftime("%H:%M")
+            logging.info(f"[AI-AUTOFIX] [{current_ts}] Final failure for user. Original error: {ytdlp_error}")
+            raise Exception("❌ Error: can't download. AI tried but also can't. Administrator has been notified.")
 
         raise Exception(f"All download methods failed. YT-DLP error: {ytdlp_error}")
     finally:

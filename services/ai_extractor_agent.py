@@ -86,24 +86,41 @@ def should_attempt_ai_autofix(url: str, error_message: str) -> bool:
     return any(token in err for token in extraction_like)
 
 
-def _fetch_html_snippet(url: str) -> str:
-    """Fetches HTML using curl_cffi to bypass basic protection."""
+def _fetch_html_snippet(url: str, proxy: Optional[str] = None) -> str:
+    """Fetches HTML using a fallback strategy: simple -> browser -> proxy."""
+    # Attempt 1: Simple (like terminal curl)
+    try:
+        headers = {"User-Agent": "curl/7.81.0", "Accept": "*/*"}
+        resp = requests.get(url, headers=headers, timeout=10, proxies={"http": None, "https": None})
+        if resp.status_code == 200:
+            logging.info("[AI-EXTRACTOR] HTML fetched via simple curl-like request.")
+            return resp.text[:15000]
+    except Exception as e:
+        logging.debug(f"[AI-EXTRACTOR] Simple fetch failed: {e}")
+
+    # Attempt 2: curl_cffi (Browser impersonation)
     try:
         from curl_cffi import requests as curl_requests
-        resp = curl_requests.get(
-            url, 
-            impersonate="chrome110", 
-            timeout=15,
-            verify=False
-        )
-        resp.raise_for_status()
-        return resp.text[:15000]
+        resp = curl_requests.get(url, impersonate="chrome110", timeout=15, verify=False)
+        if resp.status_code == 200:
+            logging.info("[AI-EXTRACTOR] HTML fetched via curl_cffi (chrome110).")
+            return resp.text[:15000]
     except Exception as e:
-        logging.warning(f"[AI-EXTRACTOR] Failed to fetch HTML via curl_cffi: {e}")
-        return f"Error fetching HTML: {e}"
-    except Exception as e:
-        logging.warning(f"[AI-AUTOFIX] Could not fetch HTML snippet: {e}")
-    return ""
+        logging.debug(f"[AI-EXTRACTOR] Browser fetch failed: {e}")
+
+    # Attempt 3: Proxy (last resort)
+    if proxy:
+        try:
+            from curl_cffi import requests as curl_requests
+            proxies = {"http": proxy, "https": proxy}
+            resp = curl_requests.get(url, impersonate="chrome110", timeout=20, verify=False, proxies=proxies)
+            if resp.status_code == 200:
+                logging.info("[AI-EXTRACTOR] HTML fetched via Proxy + curl_cffi.")
+                return resp.text[:15000]
+        except Exception as e:
+            logging.warning(f"[AI-EXTRACTOR] All HTML fetch attempts failed, including proxy: {e}")
+
+    return "Error: Could not fetch HTML snippet after multiple attempts (including 403 Forbidden)."
 
 
 def _is_network_resolution_error(message: str) -> bool:
