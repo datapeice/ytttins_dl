@@ -64,6 +64,10 @@ def should_attempt_ai_autofix(url: str, error_message: str) -> bool:
         "file is too large",
         "request expired",
         "not enough rights",
+        "http error 403",
+        "http error 429",
+        "forbidden",
+        "too many requests",
     )
     if any(token in err for token in ignored):
         return False

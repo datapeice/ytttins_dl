@@ -280,6 +280,15 @@ def get_platform(url: str) -> str:
     else:
         return "unknown"
 
+def _is_http_access_denied_error(message: str) -> bool:
+    lower = (message or "").lower()
+    return any(token in lower for token in (
+        "http error 403",
+        "http error 429",
+        "forbidden",
+        "too many requests",
+    ))
+
 def is_youtube_music(url: str) -> bool:
     return "music.youtube.com" in url
 
@@ -1226,11 +1235,11 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
         
     is_youtube = "youtube.com" in url or "youtu.be" in url or ytm_custom_query is not None
     is_instagram = "instagram.com" in url
-    user_agent = USER_AGENTS[0]
+    user_agent = USER_AGENTS[(attempt - 1) % len(USER_AGENTS)]
     use_impersonate = True
     
     try:
-        impersonate_target = IMPERSONATE_TARGETS[0]
+        impersonate_target = IMPERSONATE_TARGETS[(attempt - 1) % len(IMPERSONATE_TARGETS)]
         is_facebook = "facebook.com" in url or "fb.watch" in url
         if is_facebook:
             impersonate_target = 'chrome-99'
@@ -1385,8 +1394,27 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
         return file_path, final_thumbnail, metadata
                     
     except Exception as e:
+        err_text = str(e)
+        max_http_retries = min(4, len(USER_AGENTS), len(IMPERSONATE_TARGETS))
+        if _is_http_access_denied_error(err_text) and attempt < max_http_retries:
+            logging.warning(
+                f"⚠️ Access-denied response on attempt {attempt}/{max_http_retries}. "
+                f"Retrying with an alternate browser fingerprint..."
+            )
+            await asyncio.sleep(1.5)
+            return await _download_local_ytdlp(
+                url,
+                is_music,
+                video_height,
+                use_proxy,
+                min_duration,
+                progress_callback,
+                skip_cleanup,
+                attempt=attempt + 1
+            )
+
         # Retry once if we hit the curl_cffi shutdown error
-        if "cannot schedule new futures after shutdown" in str(e) and attempt == 1:
+        if "cannot schedule new futures after shutdown" in err_text and attempt == 1:
             logging.warning("⚠️ curl_cffi shutdown error detected. Retrying download once...")
             attempt = 2
             # Wait a moment for things to settle
@@ -1394,7 +1422,7 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
             # Recursively call with attempt 2
             return await _download_local_ytdlp(url, is_music, video_height, use_proxy, min_duration, progress_callback, skip_cleanup, attempt=2)
             
-        logging.error(f"YT-DLP critical error: {str(e)[:200]}")
+        logging.error(f"YT-DLP critical error: {err_text[:200]}")
         raise e
     
     # All attempts failed with 403/429
