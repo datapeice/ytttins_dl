@@ -139,6 +139,7 @@ services:
       - HTTPPROXY=${HTTPPROXY}
       - SHADOWSOCKS=${SHADOWSOCKS}
       - SHADOWSOCKS_LISTENING_ADDRESS=${SHADOWSOCKS_LISTENING_ADDRESS}
+      - WIREGUARD_MTU=1280
     networks:
       - bot_network
 
