@@ -480,7 +480,6 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
                 json={
                     "model": GROQ_MODEL,
                     "temperature": 0.2,
-                    "response_format": {"type": "json_object"},
                     "messages": messages,
                     "tools": tools,
                     "tool_choice": "auto",
