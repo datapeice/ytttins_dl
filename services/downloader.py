@@ -1336,6 +1336,12 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
         if "foxporns.net" in url:
             use_impersonate = True
             impersonate_target = 'chrome-110'
+            # Also add to extractor_args for generic extractor as requested by yt-dlp logs
+            if 'extractor_args' not in ydl_opts:
+                ydl_opts['extractor_args'] = {}
+            if 'generic' not in ydl_opts['extractor_args']:
+                ydl_opts['extractor_args']['generic'] = {}
+            ydl_opts['extractor_args']['generic']['impersonate'] = True
 
         if use_impersonate:
             try:
