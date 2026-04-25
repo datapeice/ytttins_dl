@@ -837,7 +837,8 @@ async def handle_url(message: types.Message, bot: Bot):
             async def update_status(text: str):
                 pass
         else:
-            status_message = await message.answer("🎬 Starting...", **reply_kwargs)
+            from services.downloader import FUNNY_STATUSES
+            status_message = await message.answer("🎬 " + random.choice(FUNNY_STATUSES), **reply_kwargs)
             async def update_status(text: str):
                 try:
                     await safe_edit_text(status_message, text)

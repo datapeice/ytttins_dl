@@ -937,9 +937,6 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             logging.error(f"[COBALT] ❌ Error (Instagram audio): {audio_error}")
         return files
     
-    async def wrapped_callback(current):
-        if progress_callback:
-            await progress_callback(current)
 
     # Resolve Threads normalization: threads.com -> threads.net
     if "threads.com" in url:
@@ -1067,7 +1064,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
         return await _download_local_ytdlp(url, is_music, video_height=video_height, min_duration=min_duration, progress_callback=wrapped_callback if progress_callback else None)
         
     except Exception as e:
-        ytdlp_error = str(e)
+        ytdlp_error = f"{type(e).__name__}: {str(e)}"
         logging.warning(f"[YT-DLP] ❌ Failed: {ytdlp_error}")
         
         # If Instagram photo-only post, go straight to Cobalt fallback
@@ -1335,14 +1332,19 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
             browser_headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36'
         ydl_opts['http_headers'] = browser_headers
         
+        # Force impersonate for known protected sites
+        if "foxporns.net" in url:
+            use_impersonate = True
+            impersonate_target = 'chrome-110'
+
         if use_impersonate:
             try:
                 target_obj = build_impersonate_target(impersonate_target)
-                ydl_opts['impersonate'] = impersonate_target
-                logging.info(f"🔒 Attempting TLS impersonation: {impersonate_target}")
+                if target_obj:
+                    ydl_opts['impersonate'] = target_obj
+                    logging.info(f"🔒 Active TLS impersonation: {impersonate_target}")
             except Exception as imp_err:
                 logging.error(f"❌ Failed to set impersonate: {imp_err}")
-                use_impersonate = False
         
         if is_instagram:
             ydl_opts['noplaylist'] = False

@@ -28,6 +28,8 @@ services:
       - YTDLP_NO_PHANTOM=1
     ports:
       - "${WEBAPP_PORT:-8443}:${WEBAPP_PORT:-8443}"
+      - "16881-16890:16881-16890"
+      - "16881-16890:16881-16890/udp"
     env_file:
       - .env
     dns:
@@ -42,6 +44,11 @@ services:
         condition: service_healthy
       home-proxy:
         condition: service_started
+    links:
+      - postgres
+      - cobalt-api
+      - telegram-bot-api
+      - home-proxy
     networks:
       - bot_network
 
@@ -95,7 +102,10 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - bot_network
+      bot_network:
+        aliases:
+          - postgres
+          - db
 
   home-proxy:
     image: curve25519xsalsa20poly1305/wireguard-socks5
