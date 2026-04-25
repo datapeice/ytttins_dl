@@ -44,6 +44,9 @@ GROQ_HEALTHCHECK_URL = "https://api.groq.com/openai/v1/models"
 PERSISTED_EXTRACTORS_DIR = "services/generated_extractors"
 GITHUB_API_BASE = "https://api.github.com"
 
+# Resolved absolute path for persisted extractors committed to the repo
+_REPO_GENERATED_DIR = Path(__file__).parent / "generated_extractors"
+
 
 
 def get_plugin_dirs() -> List[str]:
@@ -56,6 +59,28 @@ def _ensure_plugin_layout() -> None:
     for init_file in (PLUGIN_PACKAGE_DIR / "__init__.py", PLUGIN_EXTRACTOR_DIR / "__init__.py"):
         if not init_file.exists():
             init_file.write_text("", encoding="utf-8")
+    _load_persisted_extractors()
+
+
+def _load_persisted_extractors() -> None:
+    """
+    Copy all *.py extractor files committed to services/generated_extractors/
+    into the runtime plugin dir so yt-dlp can discover them.
+    Files already present in the plugin dir are skipped (runtime AI-generated
+    version takes precedence).
+    """
+    if not _REPO_GENERATED_DIR.is_dir():
+        return
+    for src_file in _REPO_GENERATED_DIR.glob("*.py"):
+        dst_file = PLUGIN_EXTRACTOR_DIR / src_file.name
+        if dst_file.exists():
+            # Already deployed (possibly a fresher AI-generated version) – skip
+            continue
+        try:
+            dst_file.write_bytes(src_file.read_bytes())
+            logging.info(f"[PLUGIN-LOADER] Loaded persisted extractor: {src_file.name}")
+        except Exception as e:
+            logging.warning(f"[PLUGIN-LOADER] Failed to load {src_file.name}: {e}")
 
 
 def should_attempt_ai_autofix(url: str, error_message: str) -> bool:
@@ -84,6 +109,12 @@ def should_attempt_ai_autofix(url: str, error_message: str) -> bool:
         "unsupported url",
         "unable to download webpage",
         "extractorerror",
+        # Generic stream scraper explicitly signals failure
+        "generic stream extraction failed",
+        # HTTP errors that indicate the extractor tried the wrong URL
+        "http error 404",
+        "http error 403",
+        "http error 410",
     )
     return any(token in err for token in extraction_like)
 
@@ -498,6 +529,11 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
         "3. SECOND PRIORITY: If stuck, use 'web_search'.\n\n"
         "RULES FOR THE EXTRACTOR CODE:\n"
         "- NEVER import 'requests' or 'urllib' inside the extractor module. ALWAYS use 'self._download_webpage'.\n"
+        "- CRITICAL: Use ABSOLUTE imports only. The plugin is loaded as 'yt_dlp_plugins.extractor.YourModule', so relative imports like 'from .common import ...' will FAIL.\n"
+        "  CORRECT: from yt_dlp.extractor.common import InfoExtractor\n"
+        "  CORRECT: from yt_dlp.utils import ExtractorError, int_or_none, str_or_none, url_or_none\n"
+        "  WRONG:   from .common import InfoExtractor  # breaks the plugin loader\n"
+        "- The _VALID_URL regex must match the FULL URL including any special characters in the path (e.g. use [^/?#\\s]+ instead of \\w+ to handle IDs with '+', '-', etc.).\n"
         "- AVOID syntax errors. Be extremely careful with triple quotes and regexes. \n"
         "- DO NOT use r\"\"\"...\"\"\" if the content ends with a quote, it causes syntax errors like 'unterminated string literal'. Use simple r'...' or r\"...\" instead.\n"
         "- Ensure the JSON is valid. The 'code' field must be a valid Python string.\n\n"
@@ -505,7 +541,7 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
         "{\n"
         "  \"action\": \"new_module\",\n"
         "  \"filename\": \"test_ie.py\",\n"
-        "  \"code\": \"import re\\nfrom .common import InfoExtractor\\n...\",\n"
+        "  \"code\": \"import re\\nfrom yt_dlp.extractor.common import InfoExtractor\\nfrom yt_dlp.utils import ExtractorError\\n...\",\n"
         "  \"notes\": \"explanation\"\n"
         "}"
     )

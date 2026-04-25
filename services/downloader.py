@@ -690,138 +690,237 @@ def _download_facebook_direct(url: str, proxy_url: Optional[str] = None) -> Opti
         return None
 
 
+def _normalize_video_url(candidate: str, page_url: str) -> Optional[str]:
+    """Normalize a candidate URL found in page source to an absolute HTTP URL."""
+    from urllib.parse import urljoin
+    candidate = candidate.replace('\\/', '/').replace('\\u0025', '%').replace('\\u0026', '&').replace('\\u003D', '=').strip().strip('"').strip("'")
+    if candidate.startswith('//'):
+        candidate = 'https:' + candidate
+    elif candidate.startswith('/'):
+        candidate = urljoin(page_url, candidate)
+    if not candidate.startswith('http'):
+        return None
+    # Filter ads / tracking noise
+    low = candidate.lower()
+    if any(x in low for x in ['ads', 'pixel', 'tracking', '/ad/', 'analytics', 'doubleclick']):
+        return None
+    return candidate
+
+
+def _extract_video_urls_from_html(html: str, page_url: str) -> List[str]:
+    """
+    Extract all candidate video stream URLs from page HTML.
+    Handles: OpenGraph tags, JW Player, Video.js, generic JS patterns,
+    base64-encoded blobs, and raw mp4/m3u8 links.
+    """
+    import re, json, base64
+    from urllib.parse import urljoin
+
+    found: List[str] = []
+
+    def _add(u: str) -> None:
+        norm = _normalize_video_url(u, page_url)
+        if norm and norm not in found:
+            found.append(norm)
+
+    # --- 1. OpenGraph / Twitter Card video meta tags ---
+    for pat in [
+        r'<meta[^>]+(?:property|name)=["\']og:video(?::secure_url|:url)?["\']\s+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\']\s+(?:property|name)=["\']og:video(?::secure_url|:url)?["\']',
+        r'<meta[^>]+(?:property|name)=["\']og:image["\']\s+content=["\']([^"\']+\.(?:mp4|webm|gif)[^"\']*)["\']',
+        r'<meta[^>]+(?:property|name)=["\']twitter:player:stream["\']\s+content=["\']([^"\']+)["\']',
+    ]:
+        for m in re.finditer(pat, html, re.IGNORECASE):
+            _add(m.group(1))
+
+    # --- 2. <source> and <video> tags ---
+    for pat in [
+        r'<source[^>]+src=["\']([^"\']+)["\']',
+        r'<video[^>]+src=["\']([^"\']+)["\']',
+        r'data-video-src=["\']([^"\']+)["\']',
+        r'data-src=["\']([^"\']+\.(?:mp4|m3u8|webm)[^"\']*)["\']',
+        r'data-url=["\']([^"\']+\.(?:mp4|m3u8|webm)[^"\']*)["\']',
+    ]:
+        for m in re.finditer(pat, html, re.IGNORECASE):
+            _add(m.group(1))
+
+    # --- 3. JW Player configs: jwplayer("x").setup({...}) or jwplayer.setup({...}) ---
+    for jw_block in re.finditer(r'jwplayer\s*\([^)]*\)\s*\.setup\s*\(\s*(\{[\s\S]*?\})\s*\)', html):
+        try:
+            cfg_str = jw_block.group(1)
+            # Extract file/sources from the raw JS object (not full JSON parse)
+            for file_m in re.finditer(r'["\']?file["\']?\s*:\s*["\']([^"\']+)["\']', cfg_str):
+                _add(file_m.group(1))
+            # JW playlist array: playlist:[{sources:[{file:"..."}]}]
+            for src_m in re.finditer(r'["\']?(?:src|file|url)["\']?\s*:\s*["\']([^"\']+\.(?:mp4|m3u8|webm|mpd)[^"\']*)["\']', cfg_str):
+                _add(src_m.group(1))
+        except Exception:
+            pass
+
+    # --- 4. Video.js: data-setup='{"sources":[{"src":"..."}]}' ---
+    for vjs in re.finditer(r'data-setup=["\'](\{[^"\']+\})["\']', html, re.IGNORECASE):
+        try:
+            cfg = json.loads(vjs.group(1))
+            for src in cfg.get('sources') or []:
+                _add(src.get('src') or src.get('file') or '')
+        except Exception:
+            pass
+
+    # --- 5. Generic JS key-value patterns ---
+    for pat in [
+        r'"file"\s*:\s*"([^"]+\.(?:mp4|m3u8|webm|mpd)[^"]*)"',
+        r'"src"\s*:\s*"([^"]+\.(?:mp4|m3u8|webm|mpd)[^"]*)"',
+        r'"url"\s*:\s*"([^"]+\.(?:mp4|m3u8|webm|mpd)[^"]*)"',
+        r'"video_url"\s*:\s*"([^"]+)"',
+        r'"hls_url"\s*:\s*"([^"]+)"',
+        r'"dash_url"\s*:\s*"([^"]+)"',
+        r'"playable_url"\s*:\s*"([^"]+)"',
+        r'"playable_url_quality_hd"\s*:\s*"([^"]+)"',
+        r'"stream_url"\s*:\s*"([^"]+)"',
+        r'"mp4_url"\s*:\s*"([^"]+)"',
+        r'"media_url"\s*:\s*"([^"]+)"',
+        r"'file'\s*:\s*'([^']+\.(?:mp4|m3u8|webm|mpd)[^']*)'",
+        r"'src'\s*:\s*'([^']+\.(?:mp4|m3u8|webm|mpd)[^']*)'",
+        r'source\s+src\s*=\s*"([^"]+)"',
+    ]:
+        for m in re.finditer(pat, html, re.IGNORECASE):
+            _add(m.group(1))
+
+    # --- 6. window.location.href redirect (file-hosting redirect pages) ---
+    for pat in [
+        r'window\.location(?:\.href)?\s*=\s*["\']([^"\']+\.(?:mp4|m3u8|webm)[^"\']*)["\']',
+        r'location\.replace\s*\(\s*["\']([^"\']+\.(?:mp4|m3u8|webm)[^"\']*)["\']',
+    ]:
+        for m in re.finditer(pat, html, re.IGNORECASE):
+            _add(m.group(1))
+
+    # --- 7. Base64-encoded URLs sometimes used by adult or stream sites ---
+    for b64_m in re.finditer(r'atob\s*\(\s*["\']([A-Za-z0-9+/=]{20,})["\']', html):
+        try:
+            decoded = base64.b64decode(b64_m.group(1)).decode('utf-8', errors='ignore')
+            if decoded.startswith('http') and any(ext in decoded for ext in ('.mp4', '.m3u8', '.webm')):
+                _add(decoded)
+        except Exception:
+            pass
+
+    # --- 8. Fallback: raw http(s) links ending with media extensions ---
+    if not found:
+        for m in re.finditer(r'https?://[^"\s<>\']+\.(?:mp4|m3u8|webm|mpd)(?:[^"\s<>\']*)?', html):
+            _add(m.group(0))
+
+    return found
+
+
+def _best_video_url(candidates: List[str]) -> str:
+    """Pick the best video URL from a ranked list of candidates."""
+    # Prefer m3u8 adaptive streams for HLS, then highest resolution mp4 hints
+    quality_keys = ['1080', '720', '480', 'hd', 'm3u8']
+    for q in quality_keys:
+        for c in candidates:
+            if q in c.lower():
+                return c
+    return candidates[0]
+
+
 def _download_generic_stream(url: str, proxy_url: Optional[str] = None) -> Optional[Path]:
     """
-    Scrape any HTML page for video stream patterns (DASH, HLS, direct MP4) 
+    Scrape any HTML page for video stream patterns (DASH, HLS, direct MP4)
     that might be hidden in JS or data attributes.
+
+    Fetch strategy (in order):
+    1. Direct requests with browser UA
+    2. curl-like UA (bypasses basic Cloudflare rules)
+    3. curl_cffi browser impersonation (bypasses TLS fingerprinting)
+    4. Proxy variants of each of the above
     """
-    import re, requests
+    import re
     from urllib.parse import urljoin
-    
+
     proxies = None
     if proxy_url:
         pv = proxy_url.replace('socks5h', 'socks5')
         proxies = {'http': pv, 'https': pv}
 
+    if not url.startswith('http'):
+        return None
+
     user_agent = random.choice(USER_AGENTS)
-    headers = {
+    browser_headers = {
         'User-Agent': user_agent,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': url
+        'Referer': url,
     }
+    curl_headers = {'User-Agent': 'curl/7.81.0', 'Accept': '*/*'}
 
-    try:
-        if not url.startswith('http'):
-            return None
-        
-        # Try direct first, then proxy fallback
-        html = None
-        working_proxies = None  # Track what worked
-        working_headers = headers
-        for attempt_proxies in [None, proxies]:
-            if attempt_proxies is None:
-                logging.info("[GENERIC-STREAM] Trying direct fetch (no proxy)...")
-            else:
-                logging.info("[GENERIC-STREAM] Trying fetch via proxy...")
-            try:
-                resp = requests.get(url, headers=headers, proxies=attempt_proxies, timeout=15, allow_redirects=True)
-                if resp.status_code == 200:
-                    html = resp.text
-                    working_proxies = attempt_proxies
-                    break
-                # If 403, also try with simple curl-like headers (bypasses some Cloudflare rules)
-                if resp.status_code == 403:
-                    simple_headers = {'User-Agent': 'curl/7.81.0', 'Accept': '*/*'}
-                    resp2 = requests.get(url, headers=simple_headers, proxies=attempt_proxies, timeout=15, allow_redirects=True)
-                    if resp2.status_code == 200:
-                        html = resp2.text
-                        working_proxies = attempt_proxies
-                        working_headers = simple_headers
-                        break
-            except Exception as fetch_err:
-                logging.debug(f"[GENERIC-STREAM] Fetch attempt failed: {fetch_err}")
-                continue
+    html: Optional[str] = None
+    working_proxies = None
+    working_headers = browser_headers
 
-        if not html:
-            return None
-
-        # Patterns for video streams, prioritized by likely quality/directness
-        patterns = [
-            # OpenGraph meta tags (Danbooru, social sites, etc.)
-            r'<meta\s+(?:property|name)=["\']og:video(?::secure_url)?["\']\s+content=["\']([^"\']+)["\']',
-            r'content=["\']([^"\']+)["\']\s+(?:property|name)=["\']og:video(?::secure_url)?["\']',
-            r'<meta\s+(?:property|name)=["\']og:image["\']\s+content=["\']([^"\']+\.(?:mp4|webm|gif)[^"\']*)["\']',
-            # Standard JS/HTML patterns
-            r'"file"\s*:\s*"([^"]+\.(?:mp4|m3u8|webm)[^"]*)"',
-            r'"src"\s*:\s*"([^"]+\.(?:mp4|m3u8|webm)[^"]*)"',
-            r'"video_url"\s*:\s*"([^"]+)"',
-            r'"playable_url"\s*:\s*"([^"]+)"',
-            r'"hls_url"\s*:\s*"([^"]+)"',
-            r'source\s+src\s*=\s*"([^"]+)"',
-            r'data-video-src\s*=\s*"([^"]+)"',
-            r'data-src\s*=\s*"([^"]+\.mp4[^"]*)"',
+    # Build fetch attempts: (headers, proxy, label)
+    fetch_attempts = [
+        (browser_headers, None,    "direct/browser-UA"),
+        (curl_headers,   None,    "direct/curl-UA"),
+    ]
+    if proxies:
+        fetch_attempts += [
+            (browser_headers, proxies, "proxy/browser-UA"),
+            (curl_headers,   proxies, "proxy/curl-UA"),
         ]
 
-        found_urls = []
-        for pattern in patterns:
-            matches = re.finditer(pattern, html)
-            for match in matches:
-                candidate = match.group(1).replace('\\/', '/').replace('\\u0025', '%').replace('\\u0026', '&')
-                if candidate.startswith('//'):
-                    candidate = 'https:' + candidate
-                elif candidate.startswith('/'):
-                    candidate = urljoin(url, candidate)
-                elif not candidate.startswith('http'):
-                    continue
-                
-                # Filter out ads or obvious garbage
-                low_cand = candidate.lower()
-                if any(x in low_cand for x in ['ads', 'pixel', 'tracking', '/ad/']):
-                    continue
-                
-                if candidate not in found_urls:
-                    found_urls.append(candidate)
+    try:
+        for hdrs, prx, label in fetch_attempts:
+            try:
+                logging.info(f"[GENERIC-STREAM] Fetch attempt: {label}")
+                resp = requests.get(url, headers=hdrs, proxies=prx, timeout=15, allow_redirects=True)
+                if resp.status_code == 200:
+                    html = resp.text
+                    working_proxies = prx
+                    working_headers = hdrs
+                    logging.info(f"[GENERIC-STREAM] HTML fetched via {label} ({len(html)} chars)")
+                    break
+                logging.debug(f"[GENERIC-STREAM] {label} → HTTP {resp.status_code}")
+            except Exception as fe:
+                logging.debug(f"[GENERIC-STREAM] {label} failed: {fe}")
 
-        if not found_urls:
-            # Fallback scan for any mp4/m3u8 link
-            ext_matches = re.findall(r'https?://[^"\s>]+(?:\.mp4|\.m3u8)[^"\s>]*', html)
-            for cand in ext_matches:
-                 if 'ads' not in cand.lower() and cand not in found_urls:
-                     found_urls.append(cand)
+        # Attempt curl_cffi browser impersonation if still no HTML
+        if not html:
+            try:
+                from curl_cffi import requests as curl_requests
+                logging.info("[GENERIC-STREAM] Trying curl_cffi browser impersonation...")
+                impersonate_target = "chrome110"
+                cffi_kwargs: dict = {"impersonate": impersonate_target, "timeout": 15, "verify": False}
+                if proxies:
+                    cffi_kwargs["proxies"] = proxies
+                resp = curl_requests.get(url, **cffi_kwargs)
+                if resp.status_code == 200:
+                    html = resp.text
+                    working_proxies = proxies
+                    working_headers = browser_headers
+                    logging.info(f"[GENERIC-STREAM] HTML fetched via curl_cffi ({len(html)} chars)")
+            except Exception as cffi_err:
+                logging.debug(f"[GENERIC-STREAM] curl_cffi failed: {cffi_err}")
 
-        if not found_urls:
+        if not html:
+            logging.warning("[GENERIC-STREAM] All fetch attempts failed, no HTML")
             return None
 
-        # Prefer higher quality (avoid 240p/144p if better exists)
-        # Clean candidates from trailing commas/bracket artifacts often found in JS
-        cleaned_urls = []
-        for cand in found_urls:
-            # Remove trailing part after a comma if it looks like JS array [480p] etc.
-            # but keep it if it's part of query string. 
-            # Usually adult sites have "url","[quality]"
-            c = cand.rstrip(',').rstrip(']').strip()
-            if ',' in c and not any(x in c.split(',')[-1] for x in ['mp4','m3u8','?','=']):
-                c = c.split(',')[0].strip('"').strip("'")
-            if c not in cleaned_urls:
-                cleaned_urls.append(c)
+        # --- Extract candidate video URLs ---
+        found_urls = _extract_video_urls_from_html(html, url)
 
-        video_url = cleaned_urls[0]
-        for cand in cleaned_urls:
-            low_cand = cand.lower()
-            if any(q in low_cand for q in ['1080p', '720p', '480p', 'hd']):
-                video_url = cand
-                if '1080p' in low_cand or '720p' in low_cand: 
-                    break # Stop at first high-quality link
+        if not found_urls:
+            logging.info("[GENERIC-STREAM] No video URLs found in page HTML")
+            return None
 
-        logging.info(f"[GENERIC-STREAM] Best stream found: {video_url[:100]}")
+        video_url = _best_video_url(found_urls)
+        logging.info(f"[GENERIC-STREAM] Best stream URL: {video_url[:120]}")
 
         unique_id = uuid.uuid4().hex[:8]
         output_path = DOWNLOADS_DIR / f"generic_{unique_id}.mp4"
-        
-        # HLS Download
-        if '.m3u8' in video_url.lower():
-            logging.info(f"[GENERIC-STREAM] Starting HLS download via ffmpeg...")
+
+        # --- HLS / DASH via ffmpeg ---
+        if any(ext in video_url.lower() for ext in ('.m3u8', '.mpd')):
+            logging.info("[GENERIC-STREAM] HLS/DASH detected — downloading via ffmpeg")
             cmd = [
                 'ffmpeg', '-y', '-i', video_url,
                 '-headers', f'User-Agent: {user_agent}\r\nReferer: {url}\r\n',
@@ -831,10 +930,11 @@ def _download_generic_stream(url: str, proxy_url: Optional[str] = None) -> Optio
             res = subprocess.run(cmd, capture_output=True, timeout=600)
             if res.returncode == 0 and output_path.exists() and output_path.stat().st_size > 1000:
                 return output_path
+            logging.warning(f"[GENERIC-STREAM] ffmpeg HLS failed: {res.stderr[-200:] if res.stderr else ''}")
             return None
 
-        # Direct MP4 Download (use same connection method that worked for HTML)
-        logging.info(f"[GENERIC-STREAM] Downloading binary stream (proxied={working_proxies is not None})...")
+        # --- Direct binary download ---
+        logging.info(f"[GENERIC-STREAM] Direct binary download (proxy={working_proxies is not None})")
         dl_headers = {**working_headers, 'Referer': url}
         vr = requests.get(video_url, headers=dl_headers, proxies=working_proxies, stream=True, timeout=300)
         if vr.status_code == 200:
@@ -843,10 +943,12 @@ def _download_generic_stream(url: str, proxy_url: Optional[str] = None) -> Optio
                     f.write(chunk)
             if output_path.exists() and output_path.stat().st_size > 1000:
                 return output_path
+        else:
+            logging.warning(f"[GENERIC-STREAM] Binary download returned HTTP {vr.status_code}")
 
     except Exception as e:
         logging.error(f"[GENERIC-STREAM] Critical failure: {e}")
-    
+
     return None
 
 
@@ -1198,8 +1300,15 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                         'webpage_url': url, 'duration': 0,
                         'width': int(w), 'height': int(h), 'verified': False,
                     }
+                # Generic stream found nothing — annotate the error so AI autofix can see it
+                if not ytdlp_error:
+                    ytdlp_error = "Generic stream extraction failed: no video found in page source"
+                else:
+                    ytdlp_error = f"{ytdlp_error} | Generic stream extraction failed: no video found in page source"
             except Exception as gen_err:
                 logging.error(f"[GENERIC-STREAM] ❌ Failed: {gen_err}")
+                if not ytdlp_error:
+                    ytdlp_error = f"Generic stream extraction failed: {gen_err}"
 
         ai_autofix_attempted = False
         ai_autofix_result = None
