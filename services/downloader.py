@@ -1209,7 +1209,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
             try:
                 if progress_callback:
                     await wrapped_callback("🤖 AI bot is autonomously applying extractor patches now. A retry will follow automatically if successful.")
-                logging.info(f"[AI-AUTOFIX] Attempting Groq-based extractor fix for: {url}")
+                logging.info(f"[AI-AUTOFIX] Attempting AI-based extractor fix for: {url}")
                 
                 verify_opts = {
                     'proxy': SOCKS_PROXY if SOCKS_PROXY else '',

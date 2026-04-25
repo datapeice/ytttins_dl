@@ -481,8 +481,8 @@ def _web_search(query: str) -> str:
 def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional[Dict] = None) -> Dict:
     if not AI_AUTOFIX_ENABLED:
         return {"attempted": False, "reason": "disabled"}
-    if not GROQ_API_KEY:
-        return {"attempted": False, "reason": "missing_groq_key"}
+    if not AI_API_KEY:
+        return {"attempted": False, "reason": "missing_ai_key"}
     
     report_logs = []
     def log_report(msg: str, system_only_extra: Optional[str] = None):
@@ -548,7 +548,7 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
     try:
         for attempt in range(4):  # Steps allowed (e.g. search + search + fix)
             if attempt > 0:
-                time.sleep(5)  # Backoff to avoid Groq 429
+                time.sleep(5)  # Backoff to avoid AI 429
             try:
                 current_model = stats.get_app_setting("ai_model", AI_MODEL)
                 payload_json = {
