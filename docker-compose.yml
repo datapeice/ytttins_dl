@@ -99,13 +99,18 @@ services:
       - bot_network
 
   home-proxy:
-    image: lksun/wireguard-socks5
+    image: curve25519xsalsa20poly1305/wireguard-socks5
     container_name: home-proxy
     restart: always
+    privileged: true
     cap_add:
       - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     volumes:
-      - ./wg_home.conf:/etc/wireguard/wg0.conf:ro,Z
+      - ./wg_home.conf:/vpn/wg.conf:ro,Z
+    environment:
+      - WIREGUARD_CONFIG=/vpn/wg.conf
     networks:
       - bot_network
 
