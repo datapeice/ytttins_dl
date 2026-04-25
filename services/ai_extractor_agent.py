@@ -22,8 +22,9 @@ except ImportError:
 from config import (
     DATA_DIR,
     AI_AUTOFIX_ENABLED,
-    GROQ_API_KEY,
-    GROQ_MODEL,
+    AI_API_KEY,
+    AI_MODEL,
+    AI_BASE_URL,
     BOT_TOKEN,
     ADMIN_USER_ID,
     AI_AUTOFIX_REQUIRE_NETWORK,
@@ -32,15 +33,15 @@ from config import (
     GITHUB_REPO,
     GITHUB_PR_BASE,
 )
+from database.storage import stats
 
 
 AUTO_PLUGIN_ROOT = DATA_DIR / "auto_plugin_dirs"
 PLUGIN_PACKAGE_DIR = AUTO_PLUGIN_ROOT / "yt_dlp_plugins"
 PLUGIN_EXTRACTOR_DIR = PLUGIN_PACKAGE_DIR / "extractor"
 MIN_EXTRACTOR_CODE_LENGTH = 200
-GROQ_API_TIMEOUT_SECONDS = 80
+AI_API_TIMEOUT_SECONDS = 80
 TARGET_CONNECT_TIMEOUT_SECONDS = 10
-GROQ_HEALTHCHECK_URL = "https://api.groq.com/openai/v1/models"
 PERSISTED_EXTRACTORS_DIR = "services/generated_extractors"
 GITHUB_API_BASE = "https://api.github.com"
 
@@ -59,7 +60,7 @@ def _ensure_plugin_layout() -> None:
 
 
 def should_attempt_ai_autofix(url: str, error_message: str) -> bool:
-    if not AI_AUTOFIX_ENABLED or not GROQ_API_KEY:
+    if not AI_AUTOFIX_ENABLED or not AI_API_KEY:
         return False
     if not url.startswith(("http://", "https://")):
         return False
@@ -149,22 +150,24 @@ def _check_network_readiness(url: str) -> Optional[str]:
         return f"cannot_resolve_target_host:{target_host}:{e}"
 
     try:
-        socket.getaddrinfo("api.groq.com", 443)
+        ai_host = urlparse(AI_BASE_URL).hostname
+        if ai_host:
+            socket.getaddrinfo(ai_host, 443)
     except Exception as e:
-        return f"cannot_resolve_groq_host:{e}"
+        return f"cannot_resolve_ai_host:{e}"
 
     try:
         response = requests.get(
-            GROQ_HEALTHCHECK_URL,
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            AI_BASE_URL.replace("/chat/completions", "/models"),
+            headers={"Authorization": f"Bearer {AI_API_KEY}"},
             timeout=TARGET_CONNECT_TIMEOUT_SECONDS,
             verify=True,
             proxies={"http": None, "https": None},
         )
         if response.status_code in (401, 403):
-            return "groq_auth_failed"
+            return "ai_auth_failed"
     except Exception as e:
-        return f"cannot_reach_groq_api:{e}"
+        pass
 
     try:
         requests.get(
@@ -198,7 +201,7 @@ def _clean_json_response(text: str) -> str:
     return payload.strip()
 
 
-def _validate_agent_payload(payload: Dict) -> Optional[str]:
+def _validate_agent_payload(payload: Dict, target_url: str) -> Optional[str]:
     action = payload.get("action")
     if action not in {"patch", "new_module", "cannot_fix", "web_search"}:
         return "invalid action"
@@ -236,6 +239,24 @@ def _validate_agent_payload(payload: Dict) -> Optional[str]:
         tree = ast.parse(code, filename=filename)
     except Exception as e:
         return f"extractor code does not compile: {e}"
+
+    valid_url_regex = None
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, ast.Assign):
+                    for target in item.targets:
+                        if isinstance(target, ast.Name) and target.id == '_VALID_URL':
+                            if isinstance(item.value, ast.Constant):
+                                valid_url_regex = item.value.value
+                            break
+
+    if valid_url_regex:
+        try:
+            if not re.match(valid_url_regex, target_url):
+                return f"The _VALID_URL regex `{valid_url_regex}` DOES NOT match the target URL: {target_url}. You MUST fix your regex to match it."
+        except Exception as e:
+            return f"Invalid regex in _VALID_URL: {e}"
 
     dangerous_modules = {"os", "subprocess", "importlib"}
     dangerous_calls = {"eval", "exec", "__import__"}
@@ -499,6 +520,7 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
         "RULES FOR THE EXTRACTOR CODE:\n"
         "- NEVER import 'requests' or 'urllib' inside the extractor module. ALWAYS use 'self._download_webpage'.\n"
         "- CRITICAL: ALWAYS import InfoExtractor like this: `from yt_dlp.extractor.common import InfoExtractor`. DO NOT use relative imports (e.g. `from .common import InfoExtractor`) because this code runs as an external plugin.\n"
+        "- The '_VALID_URL' regex MUST exactly match the provided 'url'. Pay special attention to hyphens, queries, and path segments. If in doubt, use a permissive regex like r'https?://(?:www\\.)?example\\.com/.*'\n"
         "- AVOID syntax errors. Be extremely careful with triple quotes and regexes. \n"
         "- DO NOT use r\"\"\"...\"\"\" if the content ends with a quote, it causes syntax errors like 'unterminated string literal'. Use simple r'...' or r\"...\" instead.\n"
         "- Ensure the JSON is valid. The 'code' field must be a valid Python string.\n\n"
@@ -528,8 +550,9 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
             if attempt > 0:
                 time.sleep(5)  # Backoff to avoid Groq 429
             try:
+                current_model = stats.get_app_setting("ai_model", AI_MODEL)
                 payload_json = {
-                    "model": GROQ_MODEL,
+                    "model": current_model,
                     "temperature": 0.1,
                     "messages": messages,
                     "response_format": {"type": "json_object"},
@@ -537,13 +560,13 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
                 }
 
                 response = requests.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
+                    AI_BASE_URL,
                     headers={
-                        "Authorization": f"Bearer {GROQ_API_KEY}",
+                        "Authorization": f"Bearer {AI_API_KEY}",
                         "Content-Type": "application/json",
                     },
                     json=payload_json,
-                    timeout=GROQ_API_TIMEOUT_SECONDS,
+                    timeout=AI_API_TIMEOUT_SECONDS,
                     proxies={"http": None, "https": None},
                 )
                 response.raise_for_status()
@@ -551,7 +574,7 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
                 
                 content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
                 if not content:
-                    raise ValueError("Empty response from Groq")
+                    raise ValueError("Empty response from AI")
                 
                 # Log FULL response to system logs, but only a summary to TG
                 log_report(f"Agent step {attempt+1} received. (Size: {len(content)} chars)", system_only_extra=f"--- FULL RESPONSE ---\n{content}")
@@ -566,7 +589,7 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
                     messages.append({"role": "user", "content": f"SEARCH RESULTS:\n{search_res}\n\nPlease proceed to write the extractor or perform another search if needed."})
                     continue
 
-                validation_error = _validate_agent_payload(payload)
+                validation_error = _validate_agent_payload(payload, url)
                 if validation_error:
                     log_report(f"⚠️ Attempt {attempt+1} validation failed: {validation_error}")
                     if attempt == 0:

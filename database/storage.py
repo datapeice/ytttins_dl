@@ -448,6 +448,19 @@ class Stats:
             session.commit()
             return new_val
 
+    def set_app_setting(self, key: str, value: str) -> None:
+        if not self.Session:
+            return
+            
+        with self.Session() as session:
+            setting = session.query(AppSetting).filter_by(key=key).first()
+            if not setting:
+                setting = AppSetting(key=key, value=value)
+                session.add(setting)
+            else:
+                setting.value = value
+            session.commit()
+
     def process_referral(self, new_user_id: int, referrer_id: int) -> dict:
         """Process a referral: record who referred the new user, increment referrer's count.
         Returns dict with 'success', 'referral_count', 'premium_granted', 'error'."""

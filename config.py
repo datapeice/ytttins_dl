@@ -22,8 +22,9 @@ SOCKS_PROXY = os.getenv("SOCKS_PROXY", "")
 
 # AI extractor auto-fix
 AI_AUTOFIX_ENABLED = os.getenv("AI_AUTOFIX_ENABLED", "false").lower() == "true"
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+AI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GROQ_API_KEY", "")
+AI_MODEL = os.getenv("AI_MODEL", "gemini-2.5-flash")
+AI_BASE_URL = os.getenv("AI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
 AI_AUTOFIX_REQUIRE_NETWORK = os.getenv("AI_AUTOFIX_REQUIRE_NETWORK", "true").lower() == "true"
 AI_AUTOFIX_CREATE_PR = os.getenv("AI_AUTOFIX_CREATE_PR", "false").lower() == "true"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")

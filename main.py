@@ -129,6 +129,70 @@ async def on_startup(bot: Bot):
     await bot.set_webhook(url=webhook_url, allowed_updates=["message", "inline_query", "chosen_inline_result", "callback_query", "pre_checkout_query"])
     logging.info(f"Webhook set to {webhook_url}")
 
+    # Send System Insights to Admin
+    import sys
+    import subprocess
+    
+    try:
+        import yt_dlp
+        yt_dlp_ver = yt_dlp.version.__version__
+    except Exception:
+        yt_dlp_ver = "Unknown"
+        
+    try:
+        import aiogram
+        aiogram_ver = aiogram.__version__
+    except Exception:
+        aiogram_ver = "Unknown"
+
+    try:
+        import aiohttp
+        aiohttp_ver = aiohttp.__version__
+    except Exception:
+        aiohttp_ver = "Unknown"
+        
+    try:
+        import sqlalchemy
+        sa_ver = sqlalchemy.__version__
+    except Exception:
+        sa_ver = "Unknown"
+        
+    try:
+        ffmpeg_res = await asyncio.to_thread(subprocess.run, ["ffmpeg", "-version"], capture_output=True, text=True, timeout=2)
+        ffmpeg_ver = ffmpeg_res.stdout.split('\n')[0].split('version ')[1].split(' ')[0] if 'version' in ffmpeg_res.stdout else "Installed"
+    except Exception:
+        ffmpeg_ver = "Not Found"
+
+    py_ver = sys.version.split()[0]
+
+    from config import ADMIN_USER_ID, USE_COBALT, AI_AUTOFIX_ENABLED, WHITELISTED_ENV, AI_MODEL
+    from database.storage import stats
+
+    current_model = stats.get_app_setting("ai_model", AI_MODEL)
+
+    insights = (
+        "🟢 <b>Bot Restarted Successfully</b>\n\n"
+        "⚙️ <b>Component Versions:</b>\n"
+        f"• <b>Python:</b> <code>v{py_ver}</code>\n"
+        f"• <b>aiogram:</b> <code>v{aiogram_ver}</code>\n"
+        f"• <b>aiohttp:</b> <code>v{aiohttp_ver}</code>\n"
+        f"• <b>SQLAlchemy:</b> <code>v{sa_ver}</code>\n"
+        f"• <b>yt-dlp:</b> <code>v{yt_dlp_ver}</code>\n"
+        f"• <b>FFmpeg:</b> <code>v{ffmpeg_ver}</code>\n\n"
+        "📊 <b>Module Status:</b>\n"
+        f"• <b>Cobalt API:</b> {'🟢 Enabled' if USE_COBALT else '🔴 Disabled'}\n"
+        f"• <b>AI Auto-Fix:</b> {'🟢 Enabled' if AI_AUTOFIX_ENABLED else '🔴 Disabled'} (<code>{current_model}</code>)\n"
+        f"• <b>Whitelist:</b> {'🟢 Active' if WHITELISTED_ENV else '🔴 Inactive'}\n"
+        f"• <b>Database:</b> {'🟢 Connected' if stats.Session else '🔴 Error'}\n"
+    )
+
+    if ADMIN_USER_ID:
+        try:
+            chat_id = int(ADMIN_USER_ID) if str(ADMIN_USER_ID).lstrip('-').isdigit() else ADMIN_USER_ID
+            await bot.send_message(chat_id, insights, parse_mode="HTML")
+        except Exception as e:
+            logging.error(f"Failed to send startup message to admin: {e}")
+
 async def on_shutdown(bot: Bot):
     await bot.delete_webhook()
     logging.info("Webhook deleted")

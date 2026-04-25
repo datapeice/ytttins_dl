@@ -216,6 +216,23 @@ async def cmd_removepremium(message: types.Message):
         await message.answer(f"✅ Premium removed from user `{user_id}`.", parse_mode="Markdown")
     except Exception as e:
         await message.answer(f"❌ Error: {str(e)}")
+@router.message(Command("setmodel"))
+async def cmd_setmodel(message: types.Message):
+    if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
+        await message.answer("You don't have permission.")
+        return
+        
+    args = message.text.split()[1:]
+    if not args:
+        from config import AI_MODEL
+        current_model = stats.get_app_setting("ai_model", AI_MODEL)
+        await message.answer(f"Usage: `/setmodel <model_name>`\nCurrent AI Model: `{current_model}`", parse_mode="Markdown")
+        return
+        
+    new_model = args[0]
+    stats.set_app_setting("ai_model", new_model)
+    await message.answer(f"✅ AI Model successfully updated to: `{new_model}`", parse_mode="Markdown")
+
 @router.message(Command("panel"))
 async def send_admin_panel(message: types.Message):
     if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
