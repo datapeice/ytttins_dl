@@ -1290,7 +1290,8 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
             'max_filesize': 2048 * 1024 * 1024,
             'exec_before_download': [],
             'extractor_args': {
-                'reddit': {'impersonate': True}
+                'reddit': {'impersonate': True},
+                'generic': {'impersonate': True},
             },
             'js_runtimes': {
                 'node': {'path': '/usr/local/bin/node'}

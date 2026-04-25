@@ -375,6 +375,9 @@ def _verify_generated_extractor(url: str, verify_opts_override: Optional[Dict] =
         "quiet": True,
         "no_warnings": True,
         "plugin_dirs": get_plugin_dirs(),
+        "extractor_args": {
+            "generic": {"impersonate": True},
+        },
     }
     if verify_opts_override:
         base_opts.update(verify_opts_override)
@@ -553,7 +556,7 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
         "3. SECOND PRIORITY: If stuck, use 'web_search'.\n\n"
         "RULES FOR THE EXTRACTOR CODE:\n"
         "- NEVER import 'requests' or 'urllib' inside the extractor module. ALWAYS use 'self._download_webpage'.\n"
-        "- CLOUDFLARE/403 BYPASS: If you hit 403 Forbidden, use `impersonate='chrome'` (or 'chrome-110') in `self._download_webpage(url, impersonate='chrome')`. This uses curl_cffi for TLS impersonation.\n"
+        "- CLOUDFLARE/403 BYPASS: If you hit 403 Forbidden, use `impersonate='chrome'` (or 'chrome-110') in `self._download_webpage(url, impersonate='chrome')`. This uses curl_cffi for TLS impersonation. CRITICAL: When using `impersonate`, DO NOT set a custom 'User-Agent' in headers, as it will conflict with the TLS fingerprint and cause a 403. Let yt-dlp handle the headers.\n"
         "- CRITICAL: ALWAYS import InfoExtractor like this: `from yt_dlp.extractor.common import InfoExtractor`. DO NOT use relative imports (e.g. `from .common import InfoExtractor`) because this code runs as an external plugin.\n"
         "- The '_VALID_URL' regex MUST exactly match the provided 'url'. Pay special attention to hyphens, queries, and path segments. If in doubt, use a permissive regex like r'https?://(?:www\\.)?example\\.com/.*'\n"
         "- AVOID syntax errors. Be extremely careful with triple quotes and regexes. \n"

@@ -105,8 +105,13 @@ async def on_startup(bot: Bot):
         except Exception as e:
             logging.error(f"Failed to write cookies from environment: {e}")
             
+    # Set plugin path for yt-dlp to ensure it finds AI-generated extractors
+    plugin_path = DATA_DIR / "auto_plugin_dirs"
+    os.environ["YTDLP_PLUGIN_PATH"] = str(plugin_path)
+    logging.info(f"YTDLP_PLUGIN_PATH set to: {os.environ['YTDLP_PLUGIN_PATH']}")
+
     # Convert for Cobalt if txt exists
-    if cookies_txt.exists():
+    if cookies_txt.exists() and cookies_txt.stat().st_size > 0:
         convert_netscape_to_json(cookies_txt, cookies_json)
 
     asyncio.create_task(delete_old_files())
