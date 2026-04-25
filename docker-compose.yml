@@ -28,12 +28,11 @@ services:
       - YTDLP_NO_PHANTOM=1
     ports:
       - "${WEBAPP_PORT:-8443}:${WEBAPP_PORT:-8443}"
-      - "16881-16890:16881-16890"
-      - "16881-16890:16881-16890/udp"
     env_file:
       - .env
-    security_opt:
-      - label=type:container_runtime_t 
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     depends_on:
       telegram-bot-api:
         condition: service_started
