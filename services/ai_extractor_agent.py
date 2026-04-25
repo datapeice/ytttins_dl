@@ -375,9 +375,6 @@ def _verify_generated_extractor(url: str, verify_opts_override: Optional[Dict] =
         "quiet": True,
         "no_warnings": True,
         "plugin_dirs": get_plugin_dirs(),
-        "extractor_args": {
-            "generic": {"impersonate": "chrome"},
-        },
     }
     if verify_opts_override:
         base_opts.update(verify_opts_override)

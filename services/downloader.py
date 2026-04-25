@@ -1272,13 +1272,12 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
         impersonate_target = IMPERSONATE_TARGETS[0]
         is_facebook = "facebook.com" in url or "fb.watch" in url
         if is_facebook:
-            impersonate_target = 'chrome-99'
+            target_name = 'chrome-99'
         
         ydl_opts = {
             'outtmpl': output_template,
             'cookiefile': str(cookie_file) if cookie_file.exists() and cookie_file.is_file() and cookie_file.stat().st_size > 0 else None,
             'noplaylist': True,
-            'quiet': False,
             'verbose': True,
             'legacy_server_connect': True,
             'socket_timeout': 15,
@@ -1291,7 +1290,6 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
             'exec_before_download': [],
             'extractor_args': {
                 'reddit': {'impersonate': True},
-                'generic': {'impersonate': impersonate_target},
             },
             'js_runtimes': {
                 'node': {'path': '/usr/local/bin/node'}
@@ -1340,11 +1338,8 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
         if use_impersonate:
             try:
                 target_obj = build_impersonate_target(impersonate_target)
-                if ImpersonateTarget and isinstance(target_obj, ImpersonateTarget):
-                    ydl_opts['impersonate'] = target_obj
-                    logging.info(f"🔒 Attempting TLS impersonation: {impersonate_target}")
-                else:
-                    use_impersonate = False
+                ydl_opts['impersonate'] = impersonate_target
+                logging.info(f"🔒 Attempting TLS impersonation: {impersonate_target}")
             except Exception as imp_err:
                 logging.error(f"❌ Failed to set impersonate: {imp_err}")
                 use_impersonate = False
