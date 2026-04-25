@@ -3,13 +3,12 @@ services:
     build: .
     container_name: telegram-downloader-bot
     restart: unless-stopped
-    # SELinux: Флаги :z и :Z автоматически меняют контекст безопасности файлов (chcon)
     volumes:
-      - ./downloads:/app/downloads:rw,Z # Эксклюзивный доступ для записи
-      - ./logs:/app/logs:rw,Z           # Эксклюзивный доступ для записи
-      - ./data:/app/data:rw,Z           # Эксклюзивный доступ для записи
+      - ./downloads:/app/downloads:rw,Z
+      - ./logs:/app/logs:rw,Z
+      - ./data:/app/data:rw,Z
       - ./telegram-data:/var/lib/telegram-bot-api:rw,Z
-      - ./main.py:/app/main.py:ro,Z     # Общий доступ только для чтения
+      - ./main.py:/app/main.py:ro,Z
       - ./services:/app/services:ro,Z
       - ./handlers:/app/handlers:ro,Z
       - ./.env:/app/.env:ro,Z
@@ -20,18 +19,12 @@ services:
       - USE_COBALT=${USE_COBALT:-true}
       - COBALT_URL=http://cobalt-api:9000
       - COBALT_API_KEY=${COBALT_API_KEY}
-      # Обнуляем переменные Cobalt чтобы yt-dlp их не подхватил
-      - COBALT_VIDEO_PROXY=
-      - VIDEO_PROXY=
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       - WEBHOOK_HOST=${WEBHOOK_HOST}
       - WEBHOOK_INTERNAL_HOST=http://telegram-downloader-bot:${WEBAPP_PORT:-8443}
       - WEBAPP_PORT=${WEBAPP_PORT:-8443}
-      # Chrome and PhantomJS paths for yt-dlp browser impersonation
       - CHROME_BIN=/usr/bin/google-chrome-stable
-      # Disable Chrome sandbox for Docker (required)
       - CHROME_FLAGS=--no-sandbox --disable-dev-shm-usage --disable-gpu
-      # Disable PhantomJS (broken with OpenSSL 3.x) - use Node.js instead
       - YTDLP_NO_PHANTOM=1
     ports:
       - "${WEBAPP_PORT:-8443}:${WEBAPP_PORT:-8443}"
@@ -39,7 +32,6 @@ services:
       - "16881-16890:16881-16890/udp"
     env_file:
       - .env
-    # На RHEL/CentOS иногда полезно явно указать, что контейнер должен иметь доступ к сети
     security_opt:
       - label=type:container_runtime_t 
     depends_on:
@@ -51,16 +43,6 @@ services:
         condition: service_healthy
       home-proxy:
         condition: service_started
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    healthcheck:
-      test: [ "CMD-SHELL", "pgrep -f main.py || exit 1" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
     networks:
       - bot_network
 
@@ -69,7 +51,6 @@ services:
     container_name: telegram-bot-api
     restart: unless-stopped
     environment:
-      # Важно: добавьте в ваш .env файл(или GitHub Secrets) переменные TELEGRAM_API_ID и TELEGRAM_API_HASH
       - TELEGRAM_API_ID=${TELEGRAM_API_ID}
       - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
       - TELEGRAM_LOCAL=1
@@ -118,28 +99,16 @@ services:
       - bot_network
 
   home-proxy:
-    image: qmcgaw/gluetun
+    image: p3terx/wireguard-socks5
     container_name: home-proxy
     restart: always
     cap_add:
       - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
     volumes:
       - ./wg_home.conf:/etc/wireguard/wg0.conf:ro,Z
     environment:
-      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER}
-      - VPN_TYPE=${VPN_TYPE}
-      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
-      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
-      - WIREGUARD_PRESHARED_KEY=${WIREGUARD_PRESHARED_KEY}
-      - WIREGUARD_PUBLIC_KEY=${WIREGUARD_PUBLIC_KEY}
-      - WIREGUARD_ENDPOINT_IP=${WIREGUARD_ENDPOINT_IP}
-      - WIREGUARD_ENDPOINT_PORT=${WIREGUARD_ENDPOINT_PORT}
-      - WIREGUARD_MTU=1280
-      - HTTPPROXY=${HTTPPROXY}
-      - SHADOWSOCKS=${SHADOWSOCKS}
-      - SHADOWSOCKS_LISTENING_ADDRESS=${SHADOWSOCKS_LISTENING_ADDRESS}
+      - WITH_SOCKS5=yes
+      - SOCKS5_PORT=1080
     networks:
       - bot_network
 
