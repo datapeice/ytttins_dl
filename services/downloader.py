@@ -1291,7 +1291,7 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
             'exec_before_download': [],
             'extractor_args': {
                 'reddit': {'impersonate': True},
-                'generic': {'impersonate': True},
+                'generic': {'impersonate': impersonate_target},
             },
             'js_runtimes': {
                 'node': {'path': '/usr/local/bin/node'}
