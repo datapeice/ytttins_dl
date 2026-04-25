@@ -165,25 +165,30 @@ async def on_startup(bot: Bot):
 
     py_ver = sys.version.split()[0]
 
-    from config import ADMIN_USER_ID, USE_COBALT, AI_AUTOFIX_ENABLED, WHITELISTED_ENV, AI_MODEL
+    from config import ADMIN_USER_ID, USE_COBALT, AI_AUTOFIX_ENABLED, WHITELISTED_ENV, AI_MODEL, AI_API_KEY
     from database.storage import stats
 
     current_model = stats.get_app_setting("ai_model", AI_MODEL)
+    
+    ai_status = "🔴 Disabled"
+    if AI_AUTOFIX_ENABLED:
+        ai_status = f"🟢 Enabled (<code>{current_model}</code>)" if AI_API_KEY else "⚠️ Enabled (Missing Key)"
 
     insights = (
-        "🟢 <b>Bot Restarted Successfully</b>\n\n"
-        "⚙️ <b>Component Versions:</b>\n"
+        "🚀 <b>System Insights - Bot Restarted</b>\n\n"
+        "⚙️ <b>Software Stack:</b>\n"
         f"• <b>Python:</b> <code>v{py_ver}</code>\n"
         f"• <b>aiogram:</b> <code>v{aiogram_ver}</code>\n"
         f"• <b>aiohttp:</b> <code>v{aiohttp_ver}</code>\n"
         f"• <b>SQLAlchemy:</b> <code>v{sa_ver}</code>\n"
         f"• <b>yt-dlp:</b> <code>v{yt_dlp_ver}</code>\n"
         f"• <b>FFmpeg:</b> <code>v{ffmpeg_ver}</code>\n\n"
-        "📊 <b>Module Status:</b>\n"
-        f"• <b>Cobalt API:</b> {'🟢 Enabled' if USE_COBALT else '🔴 Disabled'}\n"
-        f"• <b>AI Auto-Fix:</b> {'🟢 Enabled' if AI_AUTOFIX_ENABLED else '🔴 Disabled'} (<code>{current_model}</code>)\n"
-        f"• <b>Whitelist:</b> {'🟢 Active' if WHITELISTED_ENV else '🔴 Inactive'}\n"
-        f"• <b>Database:</b> {'🟢 Connected' if stats.Session else '🔴 Error'}\n"
+        "📊 <b>Integrations & Modules:</b>\n"
+        f"• <b>Cobalt API:</b> {'🟢 Active' if USE_COBALT else '🔴 Inactive'}\n"
+        f"• <b>AI Agent:</b> {ai_status}\n"
+        f"• <b>Whitelist:</b> {'🟢 Configured' if WHITELISTED_ENV else '🔴 Not Found'}\n"
+        f"• <b>Database:</b> {'🟢 Synced' if stats.Session else '🔴 Offline'}\n\n"
+        "✨ <b>System Status:</b> Everything is operational! ✅"
     )
 
     if ADMIN_USER_ID:

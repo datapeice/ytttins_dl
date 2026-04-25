@@ -32,6 +32,7 @@ from config import (
     GITHUB_TOKEN,
     GITHUB_REPO,
     GITHUB_PR_BASE,
+    TELEGRAM_API_URL,
 )
 from database.storage import stats
 
@@ -90,7 +91,26 @@ def should_attempt_ai_autofix(url: str, error_message: str) -> bool:
 
 
 def _fetch_html_snippet(url: str, proxy: Optional[str] = None) -> str:
-    """Fetches HTML using a fallback strategy: simple -> browser -> proxy."""
+    """Fetches HTML using a fallback strategy: yt-dlp -> simple -> browser -> proxy."""
+    # Attempt 0: yt-dlp (Most reliable for bypassing Cloudflare)
+    try:
+        from yt_dlp import YoutubeDL
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'impersonate': 'chrome',
+            'proxy': proxy if proxy else '',
+            'socket_timeout': 15,
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            resp = ydl.urlopen(url)
+            html = resp.read().decode('utf-8', errors='ignore')
+            if html and len(html) > 200:
+                logging.info("[AI-EXTRACTOR] HTML fetched via yt-dlp (impersonate=chrome).")
+                return html[:5000] + "\n...[TRUNCATED]...\n" + html[-5000:] if len(html) > 10000 else html
+    except Exception as e:
+        logging.debug(f"[AI-EXTRACTOR] yt-dlp fetch failed: {e}")
+
     # Attempt 1: Simple (like terminal curl)
     try:
         headers = {"User-Agent": "curl/7.81.0", "Accept": "*/*"}
@@ -194,10 +214,23 @@ def _read_existing_extractor(filename: str) -> Optional[str]:
 
 
 def _clean_json_response(text: str) -> str:
+    # First, handle triple backticks if present
     payload = (text or "").strip()
-    if payload.startswith("```"):
-        payload = re.sub(r"^```(?:json)?\s*", "", payload, flags=re.IGNORECASE)
-        payload = re.sub(r"\s*```$", "", payload)
+    
+    # Remove <thought>...</thought> blocks if Gemini included them
+    payload = re.sub(r"<thought>.*?</thought>", "", payload, flags=re.DOTALL | re.IGNORECASE).strip()
+
+    if "```" in payload:
+        # Extract content between ```json and ```
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", payload, re.DOTALL | re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    
+    # Otherwise, just try to find the first '{' and last '}'
+    match = re.search(r"(\{.*\})", payload, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    
     return payload.strip()
 
 
@@ -306,8 +339,9 @@ def _notify_admin(text: str) -> None:
     
     for part in parts:
         try:
+            api_base = TELEGRAM_API_URL.rstrip('/')
             requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                f"{api_base}/bot{BOT_TOKEN}/sendMessage",
                 json={"chat_id": chat_id, "text": part},
                 timeout=10,
             )
@@ -519,10 +553,12 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
         "3. SECOND PRIORITY: If stuck, use 'web_search'.\n\n"
         "RULES FOR THE EXTRACTOR CODE:\n"
         "- NEVER import 'requests' or 'urllib' inside the extractor module. ALWAYS use 'self._download_webpage'.\n"
+        "- CLOUDFLARE/403 BYPASS: If you hit 403 Forbidden, use `impersonate='chrome'` (or 'chrome-110') in `self._download_webpage(url, impersonate='chrome')`. This uses curl_cffi for TLS impersonation.\n"
         "- CRITICAL: ALWAYS import InfoExtractor like this: `from yt_dlp.extractor.common import InfoExtractor`. DO NOT use relative imports (e.g. `from .common import InfoExtractor`) because this code runs as an external plugin.\n"
         "- The '_VALID_URL' regex MUST exactly match the provided 'url'. Pay special attention to hyphens, queries, and path segments. If in doubt, use a permissive regex like r'https?://(?:www\\.)?example\\.com/.*'\n"
         "- AVOID syntax errors. Be extremely careful with triple quotes and regexes. \n"
         "- DO NOT use r\"\"\"...\"\"\" if the content ends with a quote, it causes syntax errors like 'unterminated string literal'. Use simple r'...' or r\"...\" instead.\n"
+        "- DO NOT wrap your output in tags like <thought> or markdown comments unless asked. Your output MUST be ONLY valid JSON.\n"
         "- Ensure the JSON is valid. The 'code' field must be a valid Python string.\n\n"
         "JSON STRUCTURE:\n"
         "{\n"
@@ -662,6 +698,10 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
                     return {"attempted": True, "success": False, "reason": f"agent_error: {e}"}
 
         return {"attempted": True, "success": False, "reason": "max_retries_exceeded_or_final_failure"}
+        
+    except Exception as outer_e:
+        log_report(f"🚨 CRITICAL AGENT CRASH: {outer_e}")
+        return {"attempted": True, "success": False, "reason": f"agent_crash: {outer_e}"}
     
     finally:
         # Guarantee admin notification even if the loop or code crashes
