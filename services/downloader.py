@@ -1341,7 +1341,7 @@ async def _download_local_ytdlp(url: str, is_music: bool = False, video_height: 
                 ydl_opts['extractor_args'] = {}
             if 'generic' not in ydl_opts['extractor_args']:
                 ydl_opts['extractor_args']['generic'] = {}
-            ydl_opts['extractor_args']['generic']['impersonate'] = True
+            ydl_opts['extractor_args']['generic']['impersonate'] = 'chrome'
 
         if use_impersonate:
             try:
