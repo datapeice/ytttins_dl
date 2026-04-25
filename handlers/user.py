@@ -19,7 +19,7 @@ from database.storage import stats
 from services.logger import download_logger
 from config import DOWNLOADS_DIR
 from aiogram.types import InlineQueryResultArticle, InputTextMessageContent, InlineQuery, ChosenInlineResult, InputMediaVideo, InputMediaAudio, LabeledPrice, PreCheckoutQuery
-from services.metadata import fetch_song_metadata, search_ytmusic_video_id
+from services.metadata import fetch_song_metadata
 
 router = Router()
 url_cache = {}
@@ -62,7 +62,7 @@ def format_caption(metadata: dict, platform: str, original_url: str = "", is_mus
     uploader = str(uploader).lstrip('@')
     # Escape HTML special characters in uploader name
     uploader = str(uploader).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-
+    
     title = metadata.get('title', 'Media')
     title = str(title).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     
@@ -70,13 +70,18 @@ def format_caption(metadata: dict, platform: str, original_url: str = "", is_mus
         # Use a combination of a visible emoji and custom tg-emoji if supported
         uploader = f"{uploader} <tg-emoji emoji-id=\"5233582409416448551\">✅</tg-emoji>"
 
+    parts = []
+    # Only show uploader if it's not "Unknown", or if it's TikTok (where we want to show it anyway)
+    if uploader.lower() != "unknown" or platform == "tiktok":
+        parts.append(f"👤 {uploader}")
+    
     if is_music:
-        caption = f"<a href=\"{url}\">{title}</a>\nDeveloped by @datapeice"
+        parts.append(f"<a href=\"{url}\">{title}</a>")
     else:
-        if uploader.lower() != "unknown" or platform == "tiktok":
-            caption = f"👤 {uploader} | <a href=\"{url}\">Link</a>\nDeveloped by @datapeice"
-        else:
-            caption = f"<a href=\"{url}\">Link</a>\nDeveloped by @datapeice"
+        # Video: only "Link" without title/description
+        parts.append(f"<a href=\"{url}\">Link</a>")
+        
+    caption = " | ".join(parts) + "\n" + "Developed by @datapeice"
     return caption
 
 async def probe_media_duration_seconds(media_path: Path) -> int:
@@ -115,61 +120,16 @@ async def cmd_start(message: types.Message, bot: Bot):
     display_name, stored_name, handle = resolve_user_identity(message.from_user)
     stats.add_active_user(message.from_user.id)
     
-    # Process referral deep link: /start ref_123456
-    args = message.text.split(maxsplit=1)
-    if len(args) > 1 and args[1].startswith("ref_"):
-        try:
-            referrer_id = int(args[1][4:])
-            result = stats.process_referral(message.from_user.id, referrer_id)
-            if result['success']:
-                logging.info(f"[REFERRAL] User {message.from_user.id} referred by {referrer_id} (total: {result['referral_count']})")
-                if result['premium_granted']:
-                    try:
-                        await bot.send_message(
-                            referrer_id,
-                            "🎉 <b>Referral reward!</b>\n\n"
-                            f"Your friend just joined the bot!\n"
-                            f"You now have <b>{result['referral_count']}</b> referrals.\n\n"
-                            "🌟 <b>+1 day of Premium activated!</b>\n"
-                            "Keep inviting friends for more rewards!",
-                            parse_mode='HTML'
-                        )
-                    except Exception:
-                        pass
-                else:
-                    remaining = 3 - (result['referral_count'] % 3)
-                    try:
-                        await bot.send_message(
-                            referrer_id,
-                            f"👋 Your friend just joined the bot!\n"
-                            f"Referrals: <b>{result['referral_count']}</b>/3\n"
-                            f"Invite <b>{remaining}</b> more to get <b>1 day of Premium!</b> 🌟",
-                            parse_mode='HTML'
-                        )
-                    except Exception:
-                        pass
-            else:
-                error = result.get('error')
-                if error == 'not_new_user':
-                    await message.answer("ℹ️ Referral link ignored: You are already an active user of this bot!")
-                elif error == 'self_referral':
-                    await message.answer("ℹ️ You cannot refer yourself!")
-                elif error == 'already_referred':
-                    await message.answer("ℹ️ You have already been referred by someone else!")
-        except (ValueError, Exception) as e:
-            logging.debug(f"[REFERRAL] Invalid ref link: {args[1]} — {e}")
-    
     welcome_text = (
         f"👋 <b>Hello, {display_name}!</b>\n\n"
-        f"I will help you download video, music and <b>playlists</b> from TikTok, YouTube, Instagram, Reddit and others.\n\n"
-        f"📎 <b>Just send me a link!</b>\n\n"
-        f"Download torrent files by sending the .torrent file or magnet link.\n\n"
-        f"👥 <b>Group Chats:</b>\n"
-        f"Add me to your group to download media together with friends!\n\n"
-        f"👫 <b>Invite friends:</b> /referral\n"
-        f"⭐️ <b>Support development:</b> /donate\n\n"
-        f"🔍 <b>Inline Mode:</b>\n"
-        f"Use me in <i>any</i> chat: <code>@{me.username} &lt;link&gt;</code>"
+        "I will help you download video, music and <b>playlists</b> from TikTok, YouTube, Instagram, Reddit and others.\n\n"
+        "📎 <b>Just send me a link!</b>\n\n"
+        "Download torrent files by sending the .torrent file or magnet link.\n\n"
+        "👥 <b>Group Chats:</b>\n"
+        "Add me to your group to download media together with friends!\n\n"
+        "🔍 <b>Inline Mode:</b>\n"
+        "Use me in <i>any</i> chat: <code>@{me.username} &lt;link&gt;</code>\n\n"
+        "⭐️ <b>Support development:</b> /donate"
     )
     
     kb_builder = InlineKeyboardBuilder()
@@ -186,37 +146,6 @@ async def cmd_start(message: types.Message, bot: Bot):
     # Also send the inline button for group adding
     await message.answer("Click below to invite me to your chat:", reply_markup=kb_builder.as_markup())
 
-@router.message(Command("referral"))
-async def cmd_referral(message: types.Message, bot: Bot):
-    """Show referral link and stats."""
-    me = await bot.get_me()
-    user_id = message.from_user.id
-    ref_count = stats.get_referral_count(user_id)
-    remaining = 3 - (ref_count % 3) if ref_count % 3 != 0 else 3
-    ref_link = f"https://t.me/{me.username}?start=ref_{user_id}"
-    
-    text = (
-        "👫 <b>Referral Program</b>\n\n"
-        f"Your referral link:\n<code>{ref_link}</code>\n\n"
-        f"Friends invited: <b>{ref_count}</b>\n"
-        f"Next reward in: <b>{remaining}</b> more invite(s)\n\n"
-        "🎁 <b>Reward:</b> Every 3 friends = <b>1 day of Premium!</b>\n\n"
-        "<i>Note: Only new users who haven't used the bot before count as referrals.</i>\n\n"
-        "Share your link with friends to earn free Premium access! 🌟"
-    )
-    
-    import urllib.parse
-    share_text = f"Join me on this awesome media downloader bot! 🎬\n\n@{me.username}"
-    share_url = f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote(share_text)}"
-
-    kb = InlineKeyboardBuilder()
-    kb.add(InlineKeyboardButton(
-        text="📤 Share referral link", 
-        url=share_url
-    ))
-    
-    await message.answer(text, parse_mode='HTML', reply_markup=kb.as_markup())
-
 @router.message(Command("me"))
 async def cmd_me(message: types.Message):
     user_id = message.from_user.id
@@ -224,7 +153,7 @@ async def cmd_me(message: types.Message):
     
     profile = stats.get_user_profile(user_id)
     is_premium = bool(profile.get("is_premium") if isinstance(profile, dict) else profile.is_premium)
-    daily_limit = 3
+    premium_site_limit = 10
     total_downloads = stats.get_user_downloads_count(user_id)
 
     kb_builder = InlineKeyboardBuilder()
@@ -240,9 +169,8 @@ async def cmd_me(message: types.Message):
         status = f"🆓 <b>Premium Status:</b> Inactive"
         if stats.get_app_setting("premium_limits_enabled", "True") == "True":
             daily_downloads = profile.get("daily_premium_site_downloads", 0) if isinstance(profile, dict) else profile.daily_premium_site_downloads
-            status += f"\n📊 Premium Site Downloads Today: {daily_downloads}/{daily_limit}"
-            status += f"\n⏱ Remaining Premium Videos Today: {max(0, daily_limit - daily_downloads)}"
-            status += f"\n\n👫 <b>Invite 3 friends via /referral to get 1 day of Premium!</b>"
+            status += f"\n📊 Premium Site Downloads Today: {daily_downloads}/{premium_site_limit}"
+            status += f"\n⏱ Remaining Premium Videos Today: {max(0, premium_site_limit - daily_downloads)}"
 
     kb_builder.add(InlineKeyboardButton(text="⭐️ Support Bot (Donate)", callback_data="show_donate_menu"))
 
@@ -407,33 +335,18 @@ async def handle_search(message: types.Message):
         await message.answer("❌ Please provide a song name.")
         return
 
-    user_id = message.from_user.id
-    profile = stats.get_user_profile(user_id)
-    is_premium = bool(profile.get("is_premium") if isinstance(profile, dict) else profile.is_premium)
-    
+    # Start fetching rich metadata in parallel with search/download
+    metadata_task = asyncio.create_task(fetch_song_metadata(query))
+
     reply_kwargs = {}
     if message.chat.type != 'private':
         reply_kwargs['reply_to_message_id'] = message.message_id
         stats.add_active_group(message.chat.id)
-    
+
     # Whitelist check
     if stats.whitelisted_users and not stats.is_whitelisted(message.from_user.username):
         await message.answer("⛔ Sorry, this bot is private. You are not in the whitelist.", **reply_kwargs)
         return
-    
-    # Start fetching rich metadata in parallel with search/download
-    metadata_task = asyncio.create_task(fetch_song_metadata(query))
-    
-    # Wait briefly for metadata to refine search accuracy
-    refined_query = query
-    try:
-        # 1.5s is usually enough for iTunes API
-        itunes_meta = await asyncio.wait_for(asyncio.shield(metadata_task), timeout=1.5)
-        if itunes_meta.get('artist') and itunes_meta.get('title'):
-            refined_query = f"{itunes_meta['artist']} - {itunes_meta['title']}"
-            logging.info(f"Refined search query: {refined_query}")
-    except Exception:
-        pass
 
     is_group = message.chat.type != 'private'
 
@@ -448,21 +361,10 @@ async def handle_search(message: types.Message):
                 pass
 
     try:
-        # --- Primary search: ytmusicapi + Deezer ISRC (most accurate) ---
-        ytm_video_url = None
-        try:
-            ytm_video_url = await asyncio.wait_for(search_ytmusic_video_id(refined_query), timeout=6)
-        except Exception as ytm_err:
-            logging.warning(f"[SEARCH] ytmusicapi primary search failed: {ytm_err}")
-
-        # Build ordered list of search methods.
-        # If ytmusicapi returned a direct video URL, put it first.
-        search_methods = []
-        if ytm_video_url:
-            search_methods.append(("ytmusicapi", ytm_video_url))
-        search_methods += [
-            ("youtube", f"ytsearch1:{refined_query} official audio"),
-            ("yt music", f"ytmcustomsearch:{refined_query} song"),
+        search_methods = [
+            ("soundcloud", f"scsearch1:{query}"),
+            ("yt music", f"ytmusicsearch1:{query}"),
+            ("youtube", f"ytsearch1:{query} official audio")
         ]
         
         file_path, thumbnail_path, metadata = None, None, {}
@@ -531,7 +433,7 @@ async def handle_search(message: types.Message):
                 f"URL: {video_url} | "
                 f"Title: {history_title}"
             )
-            
+                
             caption = format_caption(metadata, successful_platform, video_url, is_music=True)
             
             # Override thumbnail with high-res cover if available
@@ -636,29 +538,18 @@ async def handle_torrent_confirm(callback: types.CallbackQuery, bot: Bot):
 
 async def process_torrent_download(event: Union[types.Message, types.ChosenInlineResult], source: str, bot: Bot, status_message: types.Message = None, is_file_id: bool = False):
     """Core logic to download and upload torrent content."""
-    user_id = event.from_user.id
-    profile = stats.get_user_profile(user_id)
-    is_premium = bool(profile.get("is_premium") if isinstance(profile, dict) else profile.is_premium)
-
-    if not is_premium:
-        limits_enabled = stats.get_app_setting("premium_limits_enabled", "True") == "True"
-        if limits_enabled:
-            daily_downloads = profile.get("daily_premium_site_downloads", 0) if isinstance(profile, dict) else profile.daily_premium_site_downloads
-            if daily_downloads >= 5:
-                if status_message: await status_message.delete()
-                # Use answer method depending on event type
-                if isinstance(event, types.Message):
-                    await event.answer("❌ You have reached your daily limit of 5 downloads.\n⭐️ Donate 50+ stars (/donate) to unlock Premium and remove limits!")
-                return
-
     display_name, stored_name, handle = resolve_user_identity(event.from_user)
+    user_id = event.from_user.id
+    thread_id = getattr(event, 'message_thread_id', None) if isinstance(event, types.Message) else None
+
+    profile = stats.get_user_profile(user_id)
     sem = user_sems.premium_sems[user_id]
 
     # Don't ask the user to wait via message if the semaphore is available.
     queued_msg = None
     if sem.locked():
         if isinstance(event, types.Message):
-            queued_msg = await bot.send_message(event.chat.id, "⏳ Your torrent download is queued due to concurrent limits. Please wait...")
+            queued_msg = await bot.send_message(event.chat.id, "⏳ Your torrent download is queued due to concurrent limits. Please wait...", message_thread_id=thread_id)
 
     await sem.acquire()
     
@@ -670,7 +561,7 @@ async def process_torrent_download(event: Union[types.Message, types.ChosenInlin
     dest_chat_id = event.chat.id if isinstance(event, types.Message) else user_id
     
     if not status_message:
-        status_message = await bot.send_message(dest_chat_id, "🎬 Processing torrent...")
+        status_message = await bot.send_message(dest_chat_id, "🎬 Processing torrent...", message_thread_id=thread_id)
     
     async def update_status(text: str):
         try:
@@ -726,57 +617,50 @@ async def process_torrent_download(event: Union[types.Message, types.ChosenInlin
             file_size = file_path.stat().st_size
             if file_size > MAX_SIZE:
                 size_str = f"{file_size / (1024**3):.1f}GB"
-                await bot.send_message(dest_chat_id, f"⚠️ Skipping <b>{file_path.name}</b>: File is too large ({size_str}). Telegram limit is 2GB.", parse_mode='HTML')
+                await bot.send_message(dest_chat_id, f"⚠️ Skipping <b>{file_path.name}</b>: File is too large ({size_str}). Telegram limit is 2GB.", parse_mode='HTML', message_thread_id=thread_id)
                 continue
                 
             ext = file_path.suffix.lower()
             file_num = f"({i+1}/{len(media_files)}) " if len(media_files) > 1 else ""
             caption = f"📦 {file_num}<b>{file_path.name}</b>\n\nDownloaded via Torrent | Developed by @datapeice"
             
-            # Retry logic for FloodControl and pause
-            for attempt in range(4):
-                try:
-                    # Video extensions
-                    if ext in {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.ts'}:
-                        duration = await probe_media_duration_seconds(file_path)
-                        await bot.send_video(
-                            dest_chat_id,
-                            types.FSInputFile(file_path),
-                            caption=caption,
-                            duration=duration,
-                            supports_streaming=True,
-                            parse_mode='HTML'
-                        )
-                    # Audio extensions
-                    elif ext in {'.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus'}:
-                        await bot.send_audio(
-                            dest_chat_id,
-                            types.FSInputFile(file_path),
-                            caption=caption,
-                            parse_mode='HTML'
-                        )
-                    # Fallback for other media as documents
-                    else:
-                        await bot.send_document(
-                            dest_chat_id,
-                            types.FSInputFile(file_path),
-                            caption=caption,
-                            parse_mode='HTML'
-                        )
-                    break  # Success
-                except TelegramRetryAfter as e:
-                    sleep_time = e.retry_after + 1
-                    logging.warning(f"Torrent upload flood control: sleeping for {sleep_time}s")
-                    await asyncio.sleep(sleep_time)
-                except Exception as e:
-                    logging.error(f"Failed to upload torrent file {file_path.name}: {e}")
-                    prompt_msg = f"❌ Failed to upload {file_path.name[:50]}: {str(e)[:50]}..."
-                    await bot.send_message(dest_chat_id, prompt_msg)
-                    break  # Don't retry on non-flood errors
+            try:
+                # Video extensions
+                if ext in {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.ts'}:
+                    duration = await probe_media_duration_seconds(file_path)
+                    await bot.send_video(
+                        dest_chat_id,
+                        types.FSInputFile(file_path),
+                        caption=caption,
+                        duration=duration,
+                        supports_streaming=True,
+                        parse_mode='HTML',
+                        message_thread_id=thread_id
+                    )
+                # Audio extensions
+                elif ext in {'.flac', '.mp3', '.m4a', '.wav', '.ogg', '.opus'}:
+                    await bot.send_audio(
+                        dest_chat_id,
+                        types.FSInputFile(file_path),
+                        caption=caption,
+                        parse_mode='HTML',
+                        message_thread_id=thread_id
+                    )
+                # Fallback for other media as documents
+                else:
+                    await bot.send_document(
+                        dest_chat_id,
+                        types.FSInputFile(file_path),
+                        caption=caption,
+                        parse_mode='HTML',
+                        message_thread_id=thread_id
+                    )
+            except Exception as e:
+                logging.error(f"Failed to upload torrent file {file_path.name}: {e}")
+                prompt_msg = f"❌ Failed to upload {file_path.name[:50]}: {str(e)[:50]}..."
+                await bot.send_message(dest_chat_id, prompt_msg, message_thread_id=thread_id)
             
-            # Add a small pause between files to prevent sending messages too fast
-            if i < len(media_files) - 1:
-                await asyncio.sleep(2.5)
+            # Individual file upload...
                 
         await status_message.delete()
         # Extract original tracker URL if possible
@@ -786,19 +670,8 @@ async def process_torrent_download(event: Union[types.Message, types.ChosenInlin
         elif isinstance(torrent_source, str) and torrent_source.startswith("http"):
             tracker_url = torrent_source
         # Record stat once for the whole torrent
-        torrent_name = torrent_info.get('name', 'Torrent')
-        stats.add_download('Torrent', user_id, stored_name, 'torrent', 'torrent_file', tracker_url, title=torrent_name)
-        download_logger.info(
-            f"User: {display_name} ({handle}, ID: {user_id}) | "
-            f"Platform: torrent | "
-            f"Type: Torrent | "
-            f"URL: {tracker_url} | "
-            f"Title: {torrent_name}"
-        )
-        
-        # Torrent successfully sent, increment daily limit for free users
-        if not is_premium:
-            stats.increment_daily_premium(user_id)
+        stats.add_download('Torrent', user_id, stored_name, 'torrent', 'torrent_file', tracker_url)
+        download_logger.info(f"Torrent success: {display_name} ({handle}) downloaded {len(media_files)} files")
 
     except Exception as e:
         error_msg = str(e)
@@ -842,8 +715,6 @@ def is_premium_site(url: str) -> bool:
 @router.message(lambda m: m.text and not m.text.startswith(('/start', '/panel', '/whitelist', '/unwhitelist', 'add @', '/song')) and not m.text.lower().startswith('найти ') and not m.text.lower().startswith('search '))
 async def handle_url(message: types.Message, bot: Bot):
     # Accept any URL-like string or magnet link
-    sem = None
-    sem_acquired = False
     url_pattern = r'(?:https?://|www\.|magnet:\?xt=urn:btih:)[^\s<>"]+'
     
     match = re.search(url_pattern, message.text)
@@ -862,17 +733,17 @@ async def handle_url(message: types.Message, bot: Bot):
     profile = stats.get_user_profile(user_id)
     is_premium = bool(profile.get("is_premium") if isinstance(profile, dict) else profile.is_premium)
     is_prem_site = is_premium_site(target_url)
-    is_torrent_magnet = target_url.startswith("magnet:") or target_url.endswith(".torrent")
     
-    if (is_prem_site or is_torrent_magnet) and not is_premium:
+    if is_prem_site:
         limits_enabled = stats.get_app_setting("premium_limits_enabled", "True") == "True"
-        if limits_enabled:
+        if limits_enabled and not is_premium:
             daily_downloads = profile.get("daily_premium_site_downloads", 0) if isinstance(profile, dict) else profile.daily_premium_site_downloads
-            if daily_downloads >= 3:
-                await message.answer("❌ You have reached your daily limit of 3 downloads from premium sites / torrents.\n⭐️ Donate 50+ stars (/donate) to unlock Premium or invite friends via /referral to get free Premium!")
+            if daily_downloads >= 10:
+                await message.answer("❌ You have reached your daily limit of 10 downloads from premium sites.\n⭐️ Donate 50+ stars (/donate) to unlock Premium and remove limits!")
                 return
 
     # Semaphore selection
+    sem = None
     is_torrent_magnet = target_url.startswith("magnet:") or target_url.endswith(".torrent")
     if is_prem_site or is_torrent_magnet:
         sem = user_sems.premium_sems[user_id]
@@ -885,7 +756,6 @@ async def handle_url(message: types.Message, bot: Bot):
 
     if sem:
         await sem.acquire()
-        sem_acquired = True
     
     if queued_msg:
         try:
@@ -903,6 +773,7 @@ async def handle_url(message: types.Message, bot: Bot):
                 "Please copy the full URL from the video page.",
                 **reply_kwargs
             )
+            if sem: sem.release()
             return
 
     # Whitelist check
@@ -974,7 +845,7 @@ async def handle_url(message: types.Message, bot: Bot):
                     pass
 
         is_music = is_youtube_music(target_url) or platform == "soundcloud"
-        file_path, thumbnail_path, metadata = await download_media(target_url, is_music, progress_callback=update_status, allow_ai_autofix=not is_group)
+        file_path, thumbnail_path, metadata = await download_media(target_url, is_music, progress_callback=update_status)
 
         # Determine title based on file_path type
         if isinstance(file_path, list):
@@ -1179,11 +1050,6 @@ async def handle_url(message: types.Message, bot: Bot):
             user_error = "❌ This video is private or requires login."
         elif "Sign in to confirm" in error_msg:
             user_error = "⚠️ YouTube requires authentication (cookies). Please contact the bot admin."
-        elif "AI-AUTOFIX-ATTEMPTED" in error_msg:
-            user_error = (
-                f"```error\n{error_msg}\n```\n\n"
-                f"Contact with developer @datapeice"
-            )
         else:
             user_error = (
                 f"```error\n{error_msg}\n```\n\n"
@@ -1196,12 +1062,10 @@ async def handle_url(message: types.Message, bot: Bot):
             await message.answer(user_error, parse_mode='Markdown' if '```' in user_error else None, **reply_kwargs)
             
     finally:
-        if sem_acquired:
+        if sem:
             sem.release()
-            
-        # Daily limit increment for free users for premium sites/torrents
-        if sem_acquired and 'error_msg' not in locals() and not is_premium and (is_prem_site or platform == "torrent"):
-            stats.increment_daily_premium(user_id)
+            if is_prem_site and 'error_msg' not in locals():
+                stats.increment_daily_premium(user_id)
 
 @router.callback_query(F.data.startswith("format:"))
 async def handle_format_selection(callback: types.CallbackQuery, bot: Bot):
@@ -1264,6 +1128,7 @@ async def handle_format_selection(callback: types.CallbackQuery, bot: Bot):
             )
 
             user_id = callback.message.chat.id if callback.message else callback.from_user.id
+            thread_id = getattr(callback.message, 'message_thread_id', None) if callback.message else None
             if file_path.exists():
                 await update_status("📤 Uploading to Telegram...")
                 caption = format_caption(metadata, 'youtube', url, is_music=is_music)
@@ -1282,7 +1147,8 @@ async def handle_format_selection(callback: types.CallbackQuery, bot: Bot):
                     duration=int(metadata.get('duration', 0)),
                     caption=caption,
                     parse_mode='HTML',
-                    reply_markup=get_random_support_kb()
+                    reply_markup=get_random_support_kb(),
+                    message_thread_id=thread_id
                 )
                 
                 if callback.inline_message_id:
@@ -1369,6 +1235,7 @@ async def handle_resolution_selection(callback: types.CallbackQuery, bot: Bot):
             )
 
             user_id = callback.message.chat.id if callback.message else callback.from_user.id
+            thread_id = getattr(callback.message, 'message_thread_id', None) if callback.message else None
             if file_path.exists():
                 await update_status("📤 Uploading to Telegram...")
                 caption = format_caption(metadata, 'youtube', url, is_music=False)
@@ -1393,7 +1260,7 @@ async def handle_resolution_selection(callback: types.CallbackQuery, bot: Bot):
                 if thumbnail_path:
                    video_kwargs['thumbnail'] = types.FSInputFile(thumbnail_path)
                 
-                sent = await bot.send_video(chat_id=user_id, **video_kwargs)
+                sent = await bot.send_video(chat_id=user_id, message_thread_id=thread_id, **video_kwargs)
                 
                 if callback.inline_message_id:
                     media = types.InputMediaVideo(media=sent.video.file_id, caption=caption, parse_mode='HTML')
@@ -1479,6 +1346,7 @@ async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
         action, request_id = callback.data.split(":", 2)[1:]
         user_id = callback.from_user.id
         chat_id = callback.message.chat.id if callback.message else user_id
+        thread_id = getattr(callback.message, 'message_thread_id', None) if callback.message else None
         message_id = callback.message.message_id if callback.message else None
         inline_message_id = callback.inline_message_id
         
@@ -1511,7 +1379,7 @@ async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
                 if thumbnail_path and thumbnail_path.exists():
                     audio_kwargs["thumbnail"] = types.FSInputFile(thumbnail_path)
                 
-                await bot.send_audio(chat_id, **audio_kwargs)
+                await bot.send_audio(chat_id, message_thread_id=thread_id, **audio_kwargs)
                 # Small delay to avoid Telegram flood limits
                 await asyncio.sleep(1.5)
             except Exception as e:
@@ -1537,7 +1405,8 @@ async def handle_playlist_selection(callback: types.CallbackQuery, bot: Bot):
             await bot.send_message(
                 chat_id, 
                 f"✅ All {len(results)} tracks from playlist sent individually!",
-                reply_markup=kb.as_markup()
+                reply_markup=kb.as_markup(),
+                message_thread_id=thread_id
             )
             # Cleanup all tracked files
             for res_item in results:
@@ -1736,3 +1605,4 @@ async def handle_inline_result_chosen(chosen_result: types.ChosenInlineResult, b
             await bot.edit_message_text(text=f"❌ Error: {str(e)[:100]}", inline_message_id=inline_message_id)
         except:
             pass
+

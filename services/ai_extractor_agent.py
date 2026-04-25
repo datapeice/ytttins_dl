@@ -498,6 +498,7 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
         "3. SECOND PRIORITY: If stuck, use 'web_search'.\n\n"
         "RULES FOR THE EXTRACTOR CODE:\n"
         "- NEVER import 'requests' or 'urllib' inside the extractor module. ALWAYS use 'self._download_webpage'.\n"
+        "- CRITICAL: ALWAYS import InfoExtractor like this: `from yt_dlp.extractor.common import InfoExtractor`. DO NOT use relative imports (e.g. `from .common import InfoExtractor`) because this code runs as an external plugin.\n"
         "- AVOID syntax errors. Be extremely careful with triple quotes and regexes. \n"
         "- DO NOT use r\"\"\"...\"\"\" if the content ends with a quote, it causes syntax errors like 'unterminated string literal'. Use simple r'...' or r\"...\" instead.\n"
         "- Ensure the JSON is valid. The 'code' field must be a valid Python string.\n\n"
@@ -505,7 +506,7 @@ def run_ai_extractor_autofix(url: str, error_message: str, verify_opts: Optional
         "{\n"
         "  \"action\": \"new_module\",\n"
         "  \"filename\": \"test_ie.py\",\n"
-        "  \"code\": \"import re\\nfrom .common import InfoExtractor\\n...\",\n"
+        "  \"code\": \"import re\\nfrom yt_dlp.extractor.common import InfoExtractor\\n...\",\n"
         "  \"notes\": \"explanation\"\n"
         "}"
     )
