@@ -99,16 +99,13 @@ services:
       - bot_network
 
   home-proxy:
-    image: p3terx/wireguard-socks5
+    image: lksun/wireguard-socks5
     container_name: home-proxy
     restart: always
     cap_add:
       - NET_ADMIN
     volumes:
       - ./wg_home.conf:/etc/wireguard/wg0.conf:ro,Z
-    environment:
-      - WITH_SOCKS5=yes
-      - SOCKS5_PORT=1080
     networks:
       - bot_network
 
