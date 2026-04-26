@@ -278,25 +278,32 @@ class Stats:
         return 0
 
     def get_all_premium_users(self) -> list:
-        """Get list of all users with active premium."""
+        """Get list of all users with active premium, including last known username."""
         if self.Session:
             try:
-                from database.models import UserProfile
+                from database.models import UserProfile, DownloadHistory
                 from datetime import datetime
                 with self.Session() as session:
                     users = session.query(UserProfile).filter(
                         (UserProfile.is_premium == 1) &
                         ((UserProfile.premium_expiry.is_(None)) | (UserProfile.premium_expiry > datetime.now()))
                     ).order_by(UserProfile.premium_expiry.asc()).all()
-                    return [
-                        {
+                    result = []
+                    for u in users:
+                        # Get last known username from download history
+                        last_dl = session.query(DownloadHistory.username).filter(
+                            DownloadHistory.user_id == u.user_id,
+                            DownloadHistory.username.isnot(None)
+                        ).order_by(DownloadHistory.timestamp.desc()).first()
+                        username = last_dl[0] if last_dl else None
+                        result.append({
                             'user_id': u.user_id,
+                            'username': username,
                             'premium_expiry': u.premium_expiry,
                             'referral_count': u.referral_count or 0,
                             'referred_by': u.referred_by,
-                        }
-                        for u in users
-                    ]
+                        })
+                    return result
             except Exception as e:
                 logging.error(f"Error getting all premium users: {e}")
         return []

@@ -272,14 +272,36 @@ async def cmd_listpremium(message: types.Message):
     text = f"⭐ *Premium Users ({len(users)})*\n\n"
     for u in users:
         expiry = u['premium_expiry'].strftime('%d-%m-%Y %H:%M') if u['premium_expiry'] else 'Permanent'
+        name = f"@{u['username']}" if u['username'] else f"`{u['user_id']}`"
         ref_info = f" | refs: {u['referral_count']}" if u['referral_count'] else ""
         referred = f" | by: `{u['referred_by']}`" if u['referred_by'] else ""
-        text += f"`{u['user_id']}` — expires: {expiry}{ref_info}{referred}\n"
+        text += f"{name} — {expiry}{ref_info}{referred}\n"
     
     # Telegram message limit is 4096
     if len(text) > 4000:
         text = text[:4000] + "\n\n_...truncated_"
     
+    await message.answer(text, parse_mode="Markdown")
+
+@router.message(Command("helpadmin"))
+async def cmd_helpadmin(message: types.Message):
+    if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
+        await message.answer("You don't have permission.")
+        return
+    
+    text = (
+        "🛠 *Admin Commands*\n\n"
+        "/panel \u2014 Open admin panel (stats, history, settings)\n"
+        "/helpadmin \u2014 Show this help\n\n"
+        "*Premium:*\n"
+        "/listpremium \u2014 List all premium users\n"
+        "/givepremium `<user>` `<days>` \u2014 Grant premium\n"
+        "/removepremium `<user>` \u2014 Remove premium\n\n"
+        "*Settings:*\n"
+        "/setlimit `<N>` \u2014 Set daily download limit\n\n"
+        "*Broadcast:*\n"
+        "/broadcast `<text>` \u2014 Send message to all users\n"
+    )
     await message.answer(text, parse_mode="Markdown")
 
 @router.message(Command("panel"))
