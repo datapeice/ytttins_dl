@@ -277,6 +277,30 @@ class Stats:
                 logging.error(f"Error getting total premium users: {e}")
         return 0
 
+    def get_all_premium_users(self) -> list:
+        """Get list of all users with active premium."""
+        if self.Session:
+            try:
+                from database.models import UserProfile
+                from datetime import datetime
+                with self.Session() as session:
+                    users = session.query(UserProfile).filter(
+                        (UserProfile.is_premium == 1) &
+                        ((UserProfile.premium_expiry.is_(None)) | (UserProfile.premium_expiry > datetime.now()))
+                    ).order_by(UserProfile.premium_expiry.asc()).all()
+                    return [
+                        {
+                            'user_id': u.user_id,
+                            'premium_expiry': u.premium_expiry,
+                            'referral_count': u.referral_count or 0,
+                            'referred_by': u.referred_by,
+                        }
+                        for u in users
+                    ]
+            except Exception as e:
+                logging.error(f"Error getting all premium users: {e}")
+        return []
+
     def get_weekly_stats(self):
         today = datetime.now().date()
         week_ago = today - timedelta(days=7)

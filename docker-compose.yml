@@ -13,7 +13,7 @@ services:
       - ./handlers:/app/handlers:ro,Z
       - ./.env:/app/.env:ro,Z
     environment:
-      - TZ=${TZ:-Europe/Moscow}
+      - TZ=${TZ:-Europe/Warsaw}
       - PYTHONUNBUFFERED=1
       - TELEGRAM_API_URL=http://telegram-bot-api:8081
       - USE_COBALT=${USE_COBALT:-true}

@@ -8,30 +8,30 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
-def _local_tz() -> timezone:
-    """Returns local timezone offset parsed from TZ env var (e.g. 'Europe/Moscow')."""
-    # Explicit override always wins
+def _local_tz():
+    """Returns local timezone using zoneinfo for proper DST handling."""
+    # Explicit fixed offset override
     if os.environ.get("TZ_OFFSET"):
         return timezone(timedelta(hours=int(os.environ["TZ_OFFSET"])))
 
-    tz_str = os.environ.get("TZ", "")
-    # Map known timezone names to their standard UTC offsets
-    _TZ_MAP = {
-        "europe/moscow":    3,  # MSK UTC+3
-        "europe/kiev":      2,  # EET UTC+2 (winter), but close enough
-        "europe/kyiv":      2,
-        "europe/berlin":    1,
-        "europe/london":    0,
-        "america/new_york": -5,
-        "us/eastern":       -5,
-        "america/los_angeles": -8,
-        "us/pacific":       -8,
-        "asia/yekaterinburg": 5,
-        "asia/novosibirsk": 7,
-        "asia/vladivostok": 10,
-    }
-    offset = _TZ_MAP.get(tz_str.lower(), 3)  # default UTC+3 (matches docker-compose TZ=Europe/Moscow)
-    return timezone(timedelta(hours=offset))
+    tz_str = os.environ.get("TZ", "Europe/Warsaw")
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(tz_str)
+    except Exception:
+        # Fallback: hardcoded offsets (no DST awareness)
+        _TZ_MAP = {
+            "europe/moscow":    3,
+            "europe/warsaw":    2,
+            "europe/kiev":      2,
+            "europe/kyiv":      2,
+            "europe/berlin":    2,
+            "europe/london":    1,
+            "america/new_york": -4,
+            "us/eastern":       -4,
+        }
+        offset = _TZ_MAP.get(tz_str.lower(), 2)  # default UTC+2 (Warsaw CEST)
+        return timezone(timedelta(hours=offset))
 
 def _fmt_timestamp(dt: datetime) -> str:
     """Convert a naive UTC datetime from DB to local time string."""
@@ -257,6 +257,30 @@ async def cmd_setlimit(message: types.Message):
     new_limit = int(args[0])
     stats.set_app_setting("premium_daily_limit", str(new_limit))
     await message.answer(f"✅ Premium daily download limit set to `{new_limit}` (was `{current_limit}`).", parse_mode="Markdown")
+
+@router.message(Command("listpremium"))
+async def cmd_listpremium(message: types.Message):
+    if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
+        await message.answer("You don't have permission.")
+        return
+    
+    users = stats.get_all_premium_users()
+    if not users:
+        await message.answer("⭐ No active premium users.")
+        return
+    
+    text = f"⭐ *Premium Users ({len(users)})*\n\n"
+    for u in users:
+        expiry = u['premium_expiry'].strftime('%d-%m-%Y %H:%M') if u['premium_expiry'] else 'Permanent'
+        ref_info = f" | refs: {u['referral_count']}" if u['referral_count'] else ""
+        referred = f" | by: `{u['referred_by']}`" if u['referred_by'] else ""
+        text += f"`{u['user_id']}` — expires: {expiry}{ref_info}{referred}\n"
+    
+    # Telegram message limit is 4096
+    if len(text) > 4000:
+        text = text[:4000] + "\n\n_...truncated_"
+    
+    await message.answer(text, parse_mode="Markdown")
 
 @router.message(Command("panel"))
 async def send_admin_panel(message: types.Message):

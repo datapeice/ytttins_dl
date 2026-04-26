@@ -171,9 +171,9 @@ async def cmd_start(message: types.Message, bot: Bot):
         f"Download torrent files by sending the .torrent file or magnet link.\n\n"
         f"👥 <b>Group Chats:</b>\n"
         f"Add me to your group to download media together with friends!\n\n"
-        f"� <b>Invite friends:</b> /referral\n"
+        f"👫 <b>Invite friends:</b> /referral\n"
         f"⭐️ <b>Support development:</b> /donate\n\n"
-        f"�🔍 <b>Inline Mode:</b>\n"
+        f"🔍 <b>Inline Mode:</b>\n"
         f"Use me in <i>any</i> chat: <code>@{me.username} &lt;link&gt;</code>"
     )
     
@@ -1174,7 +1174,7 @@ async def handle_format_selection(callback: types.CallbackQuery, bot: Bot):
 
         if format_type == "video":
             builder = InlineKeyboardBuilder()
-            resolutions = [("1080p", 1080), ("720p", 720), ("480p", 480), ("360p", 360)]
+            resolutions = [("1080p ⭐", 1080), ("720p", 720), ("480p", 480), ("360p", 360)]
             for label, height in resolutions:
                 builder.add(InlineKeyboardButton(text=label, callback_data=f"dl_res:{request_id}:{height}"))
             builder.adjust(2)
@@ -1280,6 +1280,20 @@ async def handle_resolution_selection(callback: types.CallbackQuery, bot: Bot):
     try:
         await callback.answer()
         _, request_id, height = callback.data.split(":", 2)
+        
+        # Check premium for 1080p
+        if int(height) > 720:
+            user_profile = stats.get_user_profile(callback.from_user.id)
+            is_premium = False
+            if user_profile:
+                is_premium = bool(user_profile.get('is_premium') if isinstance(user_profile, dict) else user_profile.is_premium)
+            if not is_premium:
+                await callback.answer(
+                    "⭐ 1080p is available for Premium users only!\n"
+                    "Use /donate or /referral to get Premium.",
+                    show_alert=True
+                )
+                return
         
         url = url_cache.get(request_id)
         if not url:
