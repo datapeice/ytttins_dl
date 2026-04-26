@@ -1111,7 +1111,7 @@ async def download_media(url: str, is_music: bool = False, video_height: int = N
                 logging.info(f"[COBALT] Attempting download: {url}")
                 file_path, thumb_path, metadata = await cobalt_client.download_media(
                     url=url,
-                    quality="1080",
+                    quality=str(video_height) if video_height else "1080",
                     is_audio=is_music,
                     progress_callback=wrapped_callback if progress_callback else None
                 )

@@ -120,16 +120,61 @@ async def cmd_start(message: types.Message, bot: Bot):
     display_name, stored_name, handle = resolve_user_identity(message.from_user)
     stats.add_active_user(message.from_user.id)
     
+    # Process referral deep link: /start ref_123456
+    args = message.text.split(maxsplit=1)
+    if len(args) > 1 and args[1].startswith("ref_"):
+        try:
+            referrer_id = int(args[1][4:])
+            result = stats.process_referral(message.from_user.id, referrer_id)
+            if result['success']:
+                logging.info(f"[REFERRAL] User {message.from_user.id} referred by {referrer_id} (total: {result['referral_count']})")
+                if result['premium_granted']:
+                    try:
+                        await bot.send_message(
+                            referrer_id,
+                            "🎉 <b>Referral reward!</b>\n\n"
+                            f"Your friend just joined the bot!\n"
+                            f"You now have <b>{result['referral_count']}</b> referrals.\n\n"
+                            "🌟 <b>+1 day of Premium activated!</b>\n"
+                            "Keep inviting friends for more rewards!",
+                            parse_mode='HTML'
+                        )
+                    except Exception:
+                        pass
+                else:
+                    remaining = 3 - (result['referral_count'] % 3)
+                    try:
+                        await bot.send_message(
+                            referrer_id,
+                            f"👋 Your friend just joined the bot!\n"
+                            f"Referrals: <b>{result['referral_count']}</b>/3\n"
+                            f"Invite <b>{remaining}</b> more to get <b>1 day of Premium!</b> 🌟",
+                            parse_mode='HTML'
+                        )
+                    except Exception:
+                        pass
+            else:
+                error = result.get('error')
+                if error == 'not_new_user':
+                    await message.answer("ℹ️ Referral link ignored: You are already an active user of this bot!")
+                elif error == 'self_referral':
+                    await message.answer("ℹ️ You cannot refer yourself!")
+                elif error == 'already_referred':
+                    await message.answer("ℹ️ You have already been referred by someone else!")
+        except (ValueError, Exception) as e:
+            logging.debug(f"[REFERRAL] Invalid ref link: {args[1]} — {e}")
+    
     welcome_text = (
         f"👋 <b>Hello, {display_name}!</b>\n\n"
-        "I will help you download video, music and <b>playlists</b> from TikTok, YouTube, Instagram, Reddit and others.\n\n"
-        "📎 <b>Just send me a link!</b>\n\n"
-        "Download torrent files by sending the .torrent file or magnet link.\n\n"
-        "👥 <b>Group Chats:</b>\n"
-        "Add me to your group to download media together with friends!\n\n"
-        "🔍 <b>Inline Mode:</b>\n"
-        "Use me in <i>any</i> chat: <code>@{me.username} &lt;link&gt;</code>\n\n"
-        "⭐️ <b>Support development:</b> /donate"
+        f"I will help you download video, music and <b>playlists</b> from TikTok, YouTube, Instagram, Reddit and others.\n\n"
+        f"📎 <b>Just send me a link!</b>\n\n"
+        f"Download torrent files by sending the .torrent file or magnet link.\n\n"
+        f"👥 <b>Group Chats:</b>\n"
+        f"Add me to your group to download media together with friends!\n\n"
+        f"� <b>Invite friends:</b> /referral\n"
+        f"⭐️ <b>Support development:</b> /donate\n\n"
+        f"�🔍 <b>Inline Mode:</b>\n"
+        f"Use me in <i>any</i> chat: <code>@{me.username} &lt;link&gt;</code>"
     )
     
     kb_builder = InlineKeyboardBuilder()
@@ -145,6 +190,37 @@ async def cmd_start(message: types.Message, bot: Bot):
     await message.answer(welcome_text, reply_markup=reply_kb, parse_mode='HTML')
     # Also send the inline button for group adding
     await message.answer("Click below to invite me to your chat:", reply_markup=kb_builder.as_markup())
+
+@router.message(Command("referral"))
+async def cmd_referral(message: types.Message, bot: Bot):
+    """Show referral link and stats."""
+    me = await bot.get_me()
+    user_id = message.from_user.id
+    ref_count = stats.get_referral_count(user_id)
+    remaining = 3 - (ref_count % 3) if ref_count % 3 != 0 else 3
+    ref_link = f"https://t.me/{me.username}?start=ref_{user_id}"
+    
+    text = (
+        "👫 <b>Referral Program</b>\n\n"
+        f"Your referral link:\n<code>{ref_link}</code>\n\n"
+        f"Friends invited: <b>{ref_count}</b>\n"
+        f"Next reward in: <b>{remaining}</b> more invite(s)\n\n"
+        "🎁 <b>Reward:</b> Every 3 friends = <b>1 day of Premium!</b>\n\n"
+        "<i>Note: Only new users who haven't used the bot before count as referrals.</i>\n\n"
+        "Share your link with friends to earn free Premium access! 🌟"
+    )
+    
+    import urllib.parse
+    share_text = f"Join me on this awesome media downloader bot! 🎬\n\n@{me.username}"
+    share_url = f"https://t.me/share/url?url={urllib.parse.quote(ref_link)}&text={urllib.parse.quote(share_text)}"
+
+    kb = InlineKeyboardBuilder()
+    kb.add(InlineKeyboardButton(
+        text="📤 Share referral link", 
+        url=share_url
+    ))
+    
+    await message.answer(text, parse_mode='HTML', reply_markup=kb.as_markup())
 
 @router.message(Command("me"))
 async def cmd_me(message: types.Message):
@@ -740,7 +816,11 @@ async def handle_url(message: types.Message, bot: Bot):
             daily_downloads = profile.get("daily_premium_site_downloads", 0) if isinstance(profile, dict) else profile.daily_premium_site_downloads
             premium_daily_limit = int(stats.get_app_setting("premium_daily_limit", "10"))
             if daily_downloads >= premium_daily_limit:
-                await message.answer(f"❌ You have reached your daily limit of {premium_daily_limit} downloads from premium sites.\n⭐️ Donate 50+ stars (/donate) to unlock Premium and remove limits!")
+                await message.answer(
+                    f"❌ You have reached your daily limit of {premium_daily_limit} downloads from premium sites.\n\n"
+                    f"⭐️ Donate 50+ stars (/donate) to unlock Premium and remove limits!\n"
+                    f"🔗 Or invite 3 friends via /referral to get 1 day of Premium for free!"
+                )
                 return
 
     # Semaphore selection
@@ -847,7 +927,15 @@ async def handle_url(message: types.Message, bot: Bot):
                     pass
 
         is_music = is_youtube_music(target_url) or platform == "soundcloud"
-        file_path, thumbnail_path, metadata = await download_media(target_url, is_music, progress_callback=update_status)
+        video_height = None if is_premium else 720
+        try:
+            file_path, thumbnail_path, metadata = await download_media(target_url, is_music, video_height=video_height, progress_callback=update_status)
+        except Exception as quality_err:
+            if video_height and "no video formats" not in str(quality_err).lower():
+                raise
+            # Fallback: retry without height restriction if 720p failed
+            logging.info(f"[QUALITY-FALLBACK] Retrying without height limit after: {quality_err}")
+            file_path, thumbnail_path, metadata = await download_media(target_url, is_music, progress_callback=update_status)
 
         # Determine title based on file_path type
         if isinstance(file_path, list):
