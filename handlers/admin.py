@@ -233,6 +233,31 @@ async def cmd_setmodel(message: types.Message):
     stats.set_app_setting("ai_model", new_model)
     await message.answer(f"✅ AI Model successfully updated to: `{new_model}`", parse_mode="Markdown")
 
+@router.message(Command("setlimit"))
+async def cmd_setlimit(message: types.Message):
+    if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
+        await message.answer("You don't have permission.")
+        return
+        
+    args = message.text.split()[1:]
+    current_limit = stats.get_app_setting("premium_daily_limit", "10")
+    
+    if not args:
+        await message.answer(
+            f"Usage: `/setlimit <number>`\n"
+            f"Current daily premium download limit: `{current_limit}`",
+            parse_mode="Markdown"
+        )
+        return
+    
+    if not args[0].isdigit() or int(args[0]) < 1:
+        await message.answer("❌ Please provide a valid positive number.", parse_mode="Markdown")
+        return
+        
+    new_limit = int(args[0])
+    stats.set_app_setting("premium_daily_limit", str(new_limit))
+    await message.answer(f"✅ Premium daily download limit set to `{new_limit}` (was `{current_limit}`).", parse_mode="Markdown")
+
 @router.message(Command("panel"))
 async def send_admin_panel(message: types.Message):
     if str(message.from_user.id) != str(ADMIN_USER_ID) and message.from_user.username != ADMIN_USER_ID:
@@ -241,6 +266,8 @@ async def send_admin_panel(message: types.Message):
 
     weekly_stats = stats.get_weekly_stats()
     total_premium_users = stats.get_total_premium_users()
+    total_referrals = stats.get_total_referral_users()
+    referral_premiums = stats.get_total_referral_premium_users()
     
     # Получаем версию на VPS
     try:
@@ -258,6 +285,8 @@ async def send_admin_panel(message: types.Message):
         f"   🎵 Music: {weekly_stats['audio_count']}\n\n"
         f"👥 Active Users (last 7 days): {weekly_stats['active_users_count']}\n"
         f"🌟 Premium Users: {total_premium_users}\n"
+        f"🔗 Total Referrals: {total_referrals}\n"
+        f"🔗 Premium via Referral: {referral_premiums}\n"
         f"🏘 Active Groups: {weekly_stats.get('active_groups_count', 0)}\n\n"
         f"📝 Whitelisted Users:\n"
         f"{whitelisted_list}\n\n"
@@ -636,6 +665,8 @@ async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext
     elif action == "back":
         weekly_stats = stats.get_weekly_stats()
         total_premium_users = stats.get_total_premium_users()
+        total_referrals = stats.get_total_referral_users()
+        referral_premiums = stats.get_total_referral_premium_users()
         try:
             local_version = yt_dlp.version.__version__
         except:
@@ -650,6 +681,8 @@ async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext
             f"   🎵 Music: {weekly_stats['audio_count']}\n\n"
             f"👥 Active Users (last 7 days): {weekly_stats['active_users_count']}\n"
             f"🌟 Premium Users: {total_premium_users}\n"
+            f"🔗 Total Referrals: {total_referrals}\n"
+            f"🔗 Premium via Referral: {referral_premiums}\n"
             f"🏘 Active Groups: {weekly_stats.get('active_groups_count', 0)}\n\n"
             f"📝 Whitelisted Users:\n"
             f"{whitelisted_list}\n\n"
@@ -663,6 +696,7 @@ async def handle_admin_callback(callback: types.CallbackQuery, state: FSMContext
             InlineKeyboardButton(text="➖ Remove User", callback_data="admin:remove_user")],
             [InlineKeyboardButton(text="📊 Statistics", callback_data="admin:stats"),
             InlineKeyboardButton(text="📜 History", callback_data="admin:history")],
+            [InlineKeyboardButton(text=f"🔄 Toggle Limits: {stats.get_app_setting('premium_limits_enabled', 'True')}", callback_data="admin:toggle_limits")],
             [InlineKeyboardButton(text="📨 Broadcast Message", callback_data="admin:broadcast")],
             [InlineKeyboardButton(text="🍪 Update Cookies", callback_data="admin:update_cookies"),
             InlineKeyboardButton(text="🔄 Update yt-dlp", callback_data="admin:update_ytdlp")],

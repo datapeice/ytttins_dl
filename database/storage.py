@@ -530,4 +530,33 @@ class Stats:
                 return profile.referral_count or 0
             return 0
 
+    def get_total_referral_users(self) -> int:
+        """Get the total number of users who joined via a referral link."""
+        if not self.Session:
+            return 0
+        try:
+            with self.Session() as session:
+                count = session.query(func.count(UserProfile.user_id)).filter(
+                    UserProfile.referred_by.isnot(None)
+                ).scalar()
+                return count or 0
+        except Exception as e:
+            logging.error(f"Error getting total referral users: {e}")
+            return 0
+
+    def get_total_referral_premium_users(self) -> int:
+        """Get the number of users who have premium AND were referred by someone."""
+        if not self.Session:
+            return 0
+        try:
+            with self.Session() as session:
+                count = session.query(func.count(UserProfile.user_id)).filter(
+                    UserProfile.referred_by.isnot(None),
+                    UserProfile.is_premium == 1
+                ).scalar()
+                return count or 0
+        except Exception as e:
+            logging.error(f"Error getting total referral premium users: {e}")
+            return 0
+
 stats = Stats()

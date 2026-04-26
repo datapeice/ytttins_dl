@@ -153,7 +153,7 @@ async def cmd_me(message: types.Message):
     
     profile = stats.get_user_profile(user_id)
     is_premium = bool(profile.get("is_premium") if isinstance(profile, dict) else profile.is_premium)
-    premium_site_limit = 10
+    premium_site_limit = int(stats.get_app_setting("premium_daily_limit", "10"))
     total_downloads = stats.get_user_downloads_count(user_id)
 
     kb_builder = InlineKeyboardBuilder()
@@ -738,8 +738,9 @@ async def handle_url(message: types.Message, bot: Bot):
         limits_enabled = stats.get_app_setting("premium_limits_enabled", "True") == "True"
         if limits_enabled and not is_premium:
             daily_downloads = profile.get("daily_premium_site_downloads", 0) if isinstance(profile, dict) else profile.daily_premium_site_downloads
-            if daily_downloads >= 10:
-                await message.answer("❌ You have reached your daily limit of 10 downloads from premium sites.\n⭐️ Donate 50+ stars (/donate) to unlock Premium and remove limits!")
+            premium_daily_limit = int(stats.get_app_setting("premium_daily_limit", "10"))
+            if daily_downloads >= premium_daily_limit:
+                await message.answer(f"❌ You have reached your daily limit of {premium_daily_limit} downloads from premium sites.\n⭐️ Donate 50+ stars (/donate) to unlock Premium and remove limits!")
                 return
 
     # Semaphore selection
